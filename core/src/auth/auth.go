@@ -1,0 +1,246 @@
+package auth
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"github.com/clidey/whodb/core/src"
+	"github.com/clidey/whodb/core/src/env"
+	"github.com/clidey/whodb/core/src/log"
+	"github.com/clidey/whodb/core/src/source"
+	"github.com/clidey/whodb/core/src/sourcecatalog"
+)
+type AuthKey string
+const (
+	AuthKey_Token  AuthKey = "Token"
+	AuthKey_Source AuthKey = "SourceCredentials"
+)
+const maxRequestBodySize = 1024 * 1024
+const maxUploadBodySize = 250 * 1024 * 1024
+func GetSourceCredentials(ctx context.Context) *source.Credentials {
+	credentials := ctx.Value(AuthKey_Source)
+	if credentials == nil {
+		return nil
+	}
+	return credentials.(*source.Credentials)
+}
+func isPublicRoute(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api" {
+		return true
+	}
+	if env.IsDevelopment && r.Method == http.MethodPost {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return false
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var query map[string]any
+		if err := json.Unmarshal(body, &query); err == nil {
+			if q, ok := query["query"].(string); ok && strings.Contains(q, "IntrospectionQuery") {
+				return true
+			}
+		}
+	}
+	return false
+}
+func AuthMiddleware(next http.Handler) http.Handler {
+	var onceHeader sync.Once
+	var onceCookie sync.Once
+	var onceKeyring sync.Once
+	var onceInline sync.Once
+	var onceProfile sync.Once
+	const maxAuthHeaderLen = 16 * 1024
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPublicRoute(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		isMultipart := strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/")
+		if isMultipart {
+			r.Body = http.MaxBytesReader(w, r.Body, maxUploadBodySize)
+		} else {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+			body, err := readRequestBody(r)
+			if err != nil {
+				if err.Error() == "http: request body too large" {
+					http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				} else {
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				}
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(body))
+			if isAllowed(r, body) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if authBypassFn != nil && authBypassFn(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		var token string
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+			if len(token) > maxAuthHeaderLen {
+				http.Error(w, "Bad Request", http.StatusBadRequest)
+				return
+			}
+			onceHeader.Do(func() { log.Info("Auth: using Authorization header") })
+		}
+		if token == "" {
+			if dbCookie, err := r.Cookie(string(AuthKey_Token)); err == nil {
+				token = dbCookie.Value
+				onceCookie.Do(func() { log.Info("Auth: using cookie-based auth") })
+			} else {
+				log.Debugf("[Auth] Cookie not found: %v", err)
+			}
+		}
+		if token == "" {
+			log.Debug("[Auth] No token found (no cookie or header), returning 401")
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		decodedValue, err := base64.StdEncoding.DecodeString(token)
+		if err != nil {
+			log.Debugf("[Auth] Failed to decode base64 token: %v (token len=%d)", err, len(token))
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		credentials := &source.Credentials{}
+		err = json.Unmarshal(decodedValue, credentials)
+		if err != nil {
+			log.Debugf("[Auth] Failed to unmarshal credentials JSON: %v", err)
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		if env.IsAPIGatewayEnabled && (credentials.AccessToken == nil || (credentials.AccessToken != nil && !isTokenValid(*credentials.AccessToken))) {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		inline := true
+		isSavedProfileReference := credentials.ID != nil && credentials.SourceType == ""
+		if isSavedProfileReference {
+			matched := false
+			_, storedProfile, ok := src.FindSourceProfile(*credentials.ID)
+			if ok {
+				storedProfile.ID = credentials.ID
+				storedProfile.Values = mergeCredentialValues(storedProfile.Values, credentials.Values)
+				credentials = storedProfile
+				matched = true
+				inline = false
+				onceProfile.Do(func() { log.Info("Auth: credentials resolved via saved profile") })
+			}
+			if !matched {
+				if stored, err := LoadCredentials(*credentials.ID); err == nil && stored != nil {
+					stored.ID = credentials.ID
+					stored.Values = mergeCredentialValues(stored.Values, credentials.Values)
+					credentials = stored
+					inline = false
+					onceKeyring.Do(func() { log.Info("Auth: credentials resolved via OS keyring") })
+				} else {
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+			}
+		} else if credentials.ID != nil {
+			onceInline.Do(func() { log.Info("Auth: credentials supplied inline with ID") })
+		}
+		if inline {
+			onceInline.Do(func() { log.Info("Auth: credentials supplied inline") })
+		}
+		if _, ok := sourcecatalog.Find(credentials.SourceType); !ok {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, AuthKey_Source, credentials)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+func readRequestBody(r *http.Request) ([]byte, error) {
+	buf := &strings.Builder{}
+	_, err := io.Copy(buf, r.Body)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(buf.String()), nil
+}
+type GraphQLRequest struct {
+	OperationName string         `json:"operationName"`
+	Variables     map[string]any `json:"variables"`
+}
+var additionalAllowedOps []string
+func RegisterAllowedOperation(opName string) {
+	additionalAllowedOps = append(additionalAllowedOps, opName)
+}
+var authBypassFn func(*http.Request) bool
+func RegisterAuthBypass(fn func(*http.Request) bool) {
+	authBypassFn = fn
+}
+func isAllowed(r *http.Request, body []byte) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	query := GraphQLRequest{}
+	if err := json.Unmarshal(body, &query); err != nil {
+		return false
+	}
+	if query.OperationName == "SourceFieldOptions" {
+		sourceType, _ := query.Variables["sourceType"].(string)
+		spec, ok := sourcecatalog.Find(sourceType)
+		if !ok {
+			return false
+		}
+		field, ok := spec.ConnectionFieldByKey("Database")
+		return ok && field.SupportsOptions
+	}
+	switch query.OperationName {
+	case "LoginSource",
+		"LoginWithSourceProfile", "SourceProfiles",
+		"GetHealth", "SettingsConfig", "GetVersion",
+		"GetAWSProviders", "GetCloudProviders", "GetCloudProvider",
+		"GetDiscoveredConnections", "GetProviderConnections", "SourceTypes",
+		"GetLocalAWSProfiles", "GetAWSRegions",
+		"AddAWSProvider", "TestAWSCredentials", "TestCloudProvider",
+		"RefreshCloudProvider", "RemoveCloudProvider", "UpdateAWSProvider",
+		"GenerateRDSAuthToken",
+		"GetAzureProviders", "GetAzureProvider",
+		"GetAzureSubscriptions", "GetAzureRegions",
+		"AddAzureProvider", "UpdateAzureProvider", "TestAzureCredentials",
+		"RefreshAzureProvider", "GenerateAzureADToken",
+		"GetLocalGCPProjects", "GetGCPRegions",
+		"GetGCPProviders", "GetGCPProvider",
+		"AddGCPProvider", "UpdateGCPProvider", "TestGCPCredentials",
+		"RefreshGCPProvider", "GenerateCloudSQLIAMAuthToken":
+		return true
+	}
+	for _, op := range additionalAllowedOps {
+		if query.OperationName == op {
+			return true
+		}
+	}
+	return false
+}
+func mergeCredentialValues(base map[string]string, overrides map[string]string) map[string]string {
+	merged := map[string]string{}
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range overrides {
+		merged[key] = value
+	}
+	return merged
+}
+func isTokenValid(token string) bool {
+	for _, t := range env.Tokens {
+		if t == token {
+			return true
+		}
+	}
+	return false
+}

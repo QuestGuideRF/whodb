@@ -1,0 +1,5 @@
+mutation DeleteRow($ref: SourceObjectRefInput!, $values: [RecordInput!]!) {
+  DeleteRow: DeleteSourceRow(ref: $ref, values: $values) {
+    Status
+  }
+}

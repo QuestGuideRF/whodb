@@ -1,0 +1,124 @@
+en_US:
+  home: Home
+ar_AE:
+  home: "بيت"
+de_DE:
+  home: "Heim"
+el_GR:
+  home: "Σπίτι"
+en_GB:
+  home: "Home"
+es_ES:
+  home: "Hogar"
+fi_FI:
+  home: "Kotiin"
+fr_FR:
+  home: "Maison"
+it_IT:
+  home: "Casa"
+iw_IL:
+  home: "בַּיִת"
+ja_JP:
+  home: "家"
+ko_KR:
+  home: "집"
+nl_NL:
+  home: "Thuis"
+pl_PL:
+  home: "Dom"
+pt_BR:
+  home: "Lar"
+ro_RO:
+  home: "Acasă"
+ru_RU:
+  home: "Дом"
+sk_SK:
+  home: "Domov"
+sv_SE:
+  home: "Hem"
+zh_CN:
+  home: "家"
+zh_TW:
+  home: "家"
+bg_BG:
+  home: "Начало"
+bn_BD:
+  home: "বাড়ি"
+ca_ES:
+  home: "Casa"
+cs_CZ:
+  home: "Domov"
+da_DK:
+  home: "Hjem"
+fa_IR:
+  home: "صفحه اصلی"
+hi_IN:
+  home: "घर"
+hr_HR:
+  home: "Dom"
+hu_HU:
+  home: "Otthon"
+id_ID:
+  home: "Rumah"
+ms_MY:
+  home: "Rumah"
+nb_NO:
+  home: "Hjem"
+sw_KE:
+  home: "Nyumbani"
+ta_IN:
+  home: "வீடு"
+th_TH:
+  home: "บ้าน"
+tr_TR:
+  home: "Ev"
+uk_UA:
+  home: "додому"
+ur_PK:
+  home: "گھر"
+vi_VN:
+  home: "Trang chủ"
+af_ZA:
+  home: "Tuis"
+am_ET:
+  home: "ቤት"
+az_AZ:
+  home: "Ev"
+et_EE:
+  home: "Kodu"
+gu_IN:
+  home: "ઘર"
+ha_NG:
+  home: "Gida"
+ka_GE:
+  home: "მთავარი"
+km_KH:
+  home: "ផ្ទះ"
+kn_IN:
+  home: "ಮುಖಪುಟ"
+lt_LT:
+  home: "Pradžia"
+lv_LV:
+  home: "Sākums"
+ml_IN:
+  home: "വീട്"
+mr_IN:
+  home: "घर"
+ne_NP:
+  home: "घर"
+pa_IN:
+  home: "ਘਰ"
+si_LK:
+  home: "නිවස"
+sl_SI:
+  home: "domov"
+sr_RS:
+  home: "Хоме"
+te_IN:
+  home: "హోమ్"
+tl_PH:
+  home: "Bahay"
+uz_UZ:
+  home: "Uy"
+yo_NG:
+  home: "Ile"

@@ -1,0 +1,6 @@
+INSERT INTO data_types (
+    col_integer, col_real, col_text, col_numeric,
+    col_boolean, col_date, col_datetime
+) VALUES
+(2000000, 2.71828, 'text_value_2', 456.78, false, '2025-02-01', '2025-02-01 10:00:00'),
+(3000000, 1.41421, 'text_value_3', 789.01, true, '2025-02-02', '2025-02-02 11:00:00');

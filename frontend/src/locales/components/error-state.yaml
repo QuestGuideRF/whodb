@@ -1,0 +1,248 @@
+en_US:
+  title: Error
+  unknownError: An unknown error occurred.
+  copyLabel: Copy Error Message
+ar_AE:
+  title: "خطأ"
+  unknownError: "حدث خطأ غير معروف."
+  copyLabel: "نسخ رسالة الخطأ"
+de_DE:
+  title: "Fehler"
+  unknownError: "Es ist ein unbekannter Fehler aufgetreten."
+  copyLabel: "Fehlermeldung kopieren"
+el_GR:
+  title: "Σφάλμα"
+  unknownError: "Παρουσιάστηκε άγνωστο σφάλμα."
+  copyLabel: "Αντιγραφή μηνύματος λάθους"
+en_GB:
+  title: "Error"
+  unknownError: "An unknown error occurred."
+  copyLabel: "Copy Error Message"
+es_ES:
+  title: "Error"
+  unknownError: "Se produjo un error desconocido."
+  copyLabel: "Copiar mensaje de error"
+fi_FI:
+  title: "Virhe"
+  unknownError: "Tapahtui tuntematon virhe."
+  copyLabel: "Kopioi virheilmoitus"
+fr_FR:
+  title: "Erreur"
+  unknownError: "Une erreur inconnue s'est produite."
+  copyLabel: "Copier le message d'erreur"
+it_IT:
+  title: "Errore"
+  unknownError: "Si è verificato un errore sconosciuto."
+  copyLabel: "Copia messaggio di errore"
+iw_IL:
+  title: "שְׁגִיאָה"
+  unknownError: "אירעה שגיאה לא ידועה."
+  copyLabel: "העתק הודעת שגיאה"
+ja_JP:
+  title: "エラー"
+  unknownError: "不明なエラーが発生しました。"
+  copyLabel: "コピーエラーメッセージ"
+ko_KR:
+  title: "오류"
+  unknownError: "알 수 없는 오류가 발생했습니다."
+  copyLabel: "오류 메시지 복사"
+nl_NL:
+  title: "Fout"
+  unknownError: "Er is een onbekende fout opgetreden."
+  copyLabel: "Kopieer foutmelding"
+pl_PL:
+  title: "Błąd"
+  unknownError: "Wystąpił nieznany błąd."
+  copyLabel: "Skopiuj komunikat o błędzie"
+pt_BR:
+  title: "Erro"
+  unknownError: "Ocorreu um erro desconhecido."
+  copyLabel: "Mensagem de erro de cópia"
+ro_RO:
+  title: "Eroare"
+  unknownError: "A apărut o eroare necunoscută."
+  copyLabel: "Copiați mesajul de eroare"
+ru_RU:
+  title: "Ошибка"
+  unknownError: "Произошла неизвестная ошибка."
+  copyLabel: "Копирование сообщения об ошибке"
+sk_SK:
+  title: "Chyba"
+  unknownError: "Vyskytla sa neznáma chyba."
+  copyLabel: "Kopírovať chybové hlásenie"
+sv_SE:
+  title: "Fel"
+  unknownError: "Ett okänt fel uppstod."
+  copyLabel: "Kopiera felmeddelande"
+zh_CN:
+  title: "错误"
+  unknownError: "发生未知错误。"
+  copyLabel: "复制错误消息"
+zh_TW:
+  title: "錯誤"
+  unknownError: "發生未知錯誤。"
+  copyLabel: "複製錯誤訊息"
+bg_BG:
+  title: "Грешка"
+  unknownError: "Възникна неизвестна грешка."
+  copyLabel: "Копиране на съобщение за грешка"
+bn_BD:
+  title: "ত্রুটি"
+  unknownError: "একটি অজানা ত্রুটি ঘটেছে."
+  copyLabel: "কপি ত্রুটি বার্তা"
+ca_ES:
+  title: "Error"
+  unknownError: "An unknown error occurred."
+  copyLabel: "Copia el missatge d'error"
+cs_CZ:
+  title: "Chyba"
+  unknownError: "Došlo k neznámé chybě."
+  copyLabel: "Kopírovat chybovou zprávu"
+da_DK:
+  title: "Fejl"
+  unknownError: "Der opstod en ukendt fejl."
+  copyLabel: "Kopiér fejlmeddelelse"
+fa_IR:
+  title: "خطا"
+  unknownError: "یک خطای ناشناخته رخ داد."
+  copyLabel: "کپی پیغام خطا"
+hi_IN:
+  title: "गलती"
+  unknownError: "एक अज्ञात त्रुटि हुई।"
+  copyLabel: "त्रुटि संदेश कॉपी करें"
+hr_HR:
+  title: "Greška"
+  unknownError: "Došlo je do nepoznate pogreške."
+  copyLabel: "Kopiraj poruku o pogrešci"
+hu_HU:
+  title: "Hiba"
+  unknownError: "Ismeretlen hiba történt."
+  copyLabel: "Hibaüzenet másolása"
+id_ID:
+  title: "Kesalahan"
+  unknownError: "Terjadi kesalahan yang tidak diketahui."
+  copyLabel: "Salin Pesan Kesalahan"
+ms_MY:
+  title: "ralat"
+  unknownError: "Ralat tidak diketahui berlaku."
+  copyLabel: "Salin Mesej Ralat"
+nb_NO:
+  title: "Feil"
+  unknownError: "Det oppstod en ukjent feil."
+  copyLabel: "Kopier feilmelding"
+sw_KE:
+  title: "Hitilafu"
+  unknownError: "Hitilafu isiyojulikana imetokea."
+  copyLabel: "Nakili Ujumbe wa Hitilafu"
+ta_IN:
+  title: "பிழை"
+  unknownError: "அறியப்படாத பிழை ஏற்பட்டது."
+  copyLabel: "பிழைச் செய்தியை நகலெடுக்கவும்"
+th_TH:
+  title: "ข้อผิดพลาด"
+  unknownError: "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ"
+  copyLabel: "คัดลอกข้อความแสดงข้อผิดพลาด"
+tr_TR:
+  title: "Hata"
+  unknownError: "Bilinmeyen bir hata oluştu."
+  copyLabel: "Hata Mesajını Kopyala"
+uk_UA:
+  title: "Помилка"
+  unknownError: "Сталася невідома помилка."
+  copyLabel: "Копіювати повідомлення про помилку"
+ur_PK:
+  title: "خرابی"
+  unknownError: "ایک نامعلوم خرابی پیش آگئی۔"
+  copyLabel: "غلطی کا پیغام کاپی کریں۔"
+vi_VN:
+  title: "Lỗi"
+  unknownError: "Đã xảy ra lỗi không xác định."
+  copyLabel: "Sao chép thông báo lỗi"
+af_ZA:
+  title: "Fout"
+  unknownError: "'n Onbekende fout het voorgekom."
+  copyLabel: "Kopieer foutboodskap"
+am_ET:
+  title: "ስህተት"
+  unknownError: "ያልታወቀ ስህተት ተከስቷል።"
+  copyLabel: "የስህተት መልእክት ቅዳ"
+az_AZ:
+  title: "Xəta"
+  unknownError: "Naməlum xəta baş verdi."
+  copyLabel: "Xəta Mesajını Kopyalayın"
+et_EE:
+  title: "Viga"
+  unknownError: "Ilmnes tundmatu viga."
+  copyLabel: "Kopeeri veateade"
+gu_IN:
+  title: "ભૂલ"
+  unknownError: "એક અજાણી ભૂલ આવી."
+  copyLabel: "ભૂલ સંદેશની નકલ કરો"
+ha_NG:
+  title: "Kuskure"
+  unknownError: "An sami kuskuren da ba a sani ba."
+  copyLabel: "Kwafi Saƙon Kuskure"
+ka_GE:
+  title: "შეცდომა"
+  unknownError: "მოხდა უცნობი შეცდომა."
+  copyLabel: "შეცდომის შეტყობინების კოპირება"
+km_KH:
+  title: "កំហុស"
+  unknownError: "កំហុសមិនស្គាល់បានកើតឡើង។"
+  copyLabel: "ចម្លងសារកំហុស"
+kn_IN:
+  title: "ದೋಷ"
+  unknownError: "ಅಜ್ಞಾತ ದೋಷ ಸಂಭವಿಸಿದೆ."
+  copyLabel: "ದೋಷ ಸಂದೇಶವನ್ನು ನಕಲಿಸಿ"
+lt_LT:
+  title: "Klaida"
+  unknownError: "Įvyko nežinoma klaida."
+  copyLabel: "Nukopijuokite klaidos pranešimą"
+lv_LV:
+  title: "Kļūda"
+  unknownError: "Radās nezināma kļūda."
+  copyLabel: "Kopēt kļūdas ziņojumu"
+ml_IN:
+  title: "പിശക്"
+  unknownError: "ഒരു അജ്ഞാത പിശക് സംഭവിച്ചു."
+  copyLabel: "പിശക് സന്ദേശം പകർത്തുക"
+mr_IN:
+  title: "त्रुटी"
+  unknownError: "एक अज्ञात त्रुटी आली."
+  copyLabel: "एरर मेसेज कॉपी करा"
+ne_NP:
+  title: "त्रुटि"
+  unknownError: "एउटा अज्ञात त्रुटि भयो।"
+  copyLabel: "त्रुटि सन्देश प्रतिलिपि गर्नुहोस्"
+pa_IN:
+  title: "ਗਲਤੀ"
+  unknownError: "ਇੱਕ ਅਗਿਆਤ ਤਰੁੱਟੀ ਆਈ ਹੈ।"
+  copyLabel: "ਗਲਤੀ ਸੁਨੇਹਾ ਕਾਪੀ ਕਰੋ"
+si_LK:
+  title: "දෝෂයකි"
+  unknownError: "නොදන්නා දෝෂයක් සිදු විය."
+  copyLabel: "දෝෂ පණිවිඩය පිටපත් කරන්න"
+sl_SI:
+  title: "Napaka"
+  unknownError: "Prišlo je do neznane napake."
+  copyLabel: "Kopiraj sporočilo o napaki"
+sr_RS:
+  title: "Грешка"
+  unknownError: "Дошло је до непознате грешке."
+  copyLabel: "Копирај поруку о грешци"
+te_IN:
+  title: "లోపం"
+  unknownError: "తెలియని లోపం సంభవించింది."
+  copyLabel: "దోష సందేశాన్ని కాపీ చేయండి"
+tl_PH:
+  title: "Error"
+  unknownError: "May naganap na hindi kilalang error."
+  copyLabel: "Kopyahin ang Error Message"
+uz_UZ:
+  title: "Xato"
+  unknownError: "Noma'lum xatolik yuz berdi."
+  copyLabel: "Xato xabarini nusxalash"
+yo_NG:
+  title: "Asise"
+  unknownError: "Aṣiṣe aimọ kan ṣẹlẹ."
+  copyLabel: "Daakọ Ifiranṣẹ Aṣiṣe"

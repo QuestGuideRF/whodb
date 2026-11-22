@@ -1,0 +1,9 @@
+schema: ../core/graph/schema.graphqls
+documents: src/**/*.graphql
+generates:
+  src/generated/:
+    preset: client
+    presetConfig:
+      fragmentMasking: false
+    config:
+      useTypeImports: true

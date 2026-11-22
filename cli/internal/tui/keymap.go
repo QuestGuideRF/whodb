@@ -1,0 +1,853 @@
+package tui
+import (
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/clidey/whodb/cli/pkg/styles"
+)
+type GlobalKeys struct {
+	Quit        key.Binding
+	Help        key.Binding
+	NextView    key.Binding
+	Back        key.Binding
+	CycleTheme  key.Binding
+	CycleLayout key.Binding
+	Import      key.Binding
+	MockData    key.Binding
+	ReadOnly    key.Binding
+	CmdLog      key.Binding
+	SchemaDiff  key.Binding
+	ERDiagram   key.Binding
+	Audit       key.Binding
+	Profiles    key.Binding
+}
+type ProfilesKeys struct {
+	Up     key.Binding
+	Down   key.Binding
+	Apply  key.Binding
+	Save   key.Binding
+	Delete key.Binding
+}
+type BrowserKeys struct {
+	Up         key.Binding
+	Down       key.Binding
+	Left       key.Binding
+	Right      key.Binding
+	Select     key.Binding
+	Filter     key.Binding
+	Schema     key.Binding
+	Refresh    key.Binding
+	Editor     key.Binding
+	AIChat     key.Binding
+	History    key.Binding
+	Disconnect key.Binding
+}
+type EditorKeys struct {
+	Execute      key.Binding
+	Autocomplete key.Binding
+	Clear        key.Binding
+	Format       key.Binding
+	OpenEditor   key.Binding
+	Bookmarks    key.Binding
+	Explain      key.Binding
+	NewTab       key.Binding
+	CloseTab     key.Binding
+	PrevTab      key.Binding
+	NextTab      key.Binding
+}
+type ResultsKeys struct {
+	Up         key.Binding
+	Down       key.Binding
+	ColLeft    key.Binding
+	ColRight   key.Binding
+	NextPage   key.Binding
+	PrevPage   key.Binding
+	Where      key.Binding
+	Columns    key.Binding
+	AddRow     key.Binding
+	EditRow    key.Binding
+	DeleteRow  key.Binding
+	Export     key.Binding
+	PageSize   key.Binding
+	CustomSize key.Binding
+	ViewCell   key.Binding
+}
+type HistoryKeys struct {
+	Edit     key.Binding
+	Rerun    key.Binding
+	ClearAll key.Binding
+}
+type ChatKeys struct {
+	CycleFieldUp   key.Binding
+	CycleFieldDown key.Binding
+	ChangeLeft     key.Binding
+	ChangeRight    key.Binding
+	Send           key.Binding
+	SelectPrevMsg  key.Binding
+	SelectNextMsg  key.Binding
+	FocusInput     key.Binding
+	RevokeConsent  key.Binding
+	LoadModels     key.Binding
+}
+type SchemaKeys struct {
+	Up       key.Binding
+	Down     key.Binding
+	Toggle   key.Binding
+	ViewData key.Binding
+	Filter   key.Binding
+	Refresh  key.Binding
+}
+type ColumnsKeys struct {
+	Up         key.Binding
+	Down       key.Binding
+	Toggle     key.Binding
+	SelectAll  key.Binding
+	SelectNone key.Binding
+	Apply      key.Binding
+}
+type WhereListKeys struct {
+	Up          key.Binding
+	Down        key.Binding
+	Add         key.Binding
+	EditCond    key.Binding
+	Delete      key.Binding
+	Apply       key.Binding
+	NewGroup    key.Binding
+	ToggleLogic key.Binding
+}
+type WhereAddKeys struct {
+	Prev    key.Binding
+	Next    key.Binding
+	Change  key.Binding
+	Confirm key.Binding
+}
+type ExportKeys struct {
+	Prev        key.Binding
+	Next        key.Binding
+	OptionLeft  key.Binding
+	OptionRight key.Binding
+	Export      key.Binding
+}
+type ConnectionListKeys struct {
+	Up         key.Binding
+	Down       key.Binding
+	Connect    key.Binding
+	New        key.Binding
+	DeleteConn key.Binding
+	QuitEsc    key.Binding
+}
+type ConnectionFormKeys struct {
+	Navigate    key.Binding
+	TypeLeft    key.Binding
+	TypeRight   key.Binding
+	ConnectForm key.Binding
+}
+type FilterKeys struct {
+	CancelFilter key.Binding
+	ApplyFilter  key.Binding
+}
+type BookmarksKeys struct {
+	Up     key.Binding
+	Down   key.Binding
+	Load   key.Binding
+	Save   key.Binding
+	Delete key.Binding
+}
+type AuditKeys struct {
+	Up        key.Binding
+	Down      key.Binding
+	DrillDown key.Binding
+}
+type SchemaDiffKeys struct {
+	PrevField   key.Binding
+	NextField   key.Binding
+	OptionLeft  key.Binding
+	OptionRight key.Binding
+	Compare     key.Binding
+	Edit        key.Binding
+	Recompare   key.Binding
+	ScrollUp    key.Binding
+	ScrollDown  key.Binding
+}
+type ERDKeys struct {
+	NextTable  key.Binding
+	PrevTable  key.Binding
+	ToggleZoom key.Binding
+	ScrollUp   key.Binding
+	ScrollDown key.Binding
+}
+type SchemaSelectKeys struct {
+	NavLeft      key.Binding
+	NavRight     key.Binding
+	SelectSchema key.Binding
+}
+type Keymap struct {
+	Global         GlobalKeys
+	Browser        BrowserKeys
+	Editor         EditorKeys
+	Results        ResultsKeys
+	History        HistoryKeys
+	Chat           ChatKeys
+	Schema         SchemaKeys
+	Columns        ColumnsKeys
+	WhereList      WhereListKeys
+	WhereAdd       WhereAddKeys
+	Export         ExportKeys
+	ConnectionList ConnectionListKeys
+	ConnectionForm ConnectionFormKeys
+	Filter         FilterKeys
+	SchemaSelect   SchemaSelectKeys
+	Bookmarks      BookmarksKeys
+	Audit          AuditKeys
+	SchemaDiff     SchemaDiffKeys
+	ERD            ERDKeys
+	Profiles       ProfilesKeys
+}
+var Keys = Keymap{
+	Global: GlobalKeys{
+		Quit: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
+		),
+		NextView: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "next view"),
+		),
+		Back: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "back"),
+		),
+		CycleTheme: key.NewBinding(
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("ctrl+t", "cycle theme"),
+		),
+		CycleLayout: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("ctrl+l", "cycle layout"),
+		),
+		Import: key.NewBinding(
+			key.WithKeys("ctrl+g"),
+			key.WithHelp("ctrl+g", "import"),
+		),
+		MockData: key.NewBinding(
+			key.WithKeys("alt+m"),
+			key.WithHelp("alt+m", "mock data"),
+		),
+		ReadOnly: key.NewBinding(
+			key.WithKeys("ctrl+y"),
+			key.WithHelp("ctrl+y", "read-only"),
+		),
+		CmdLog: key.NewBinding(
+			key.WithKeys("ctrl+d"),
+			key.WithHelp("ctrl+d", "command log"),
+		),
+		SchemaDiff: key.NewBinding(
+			key.WithKeys("ctrl+v"),
+			key.WithHelp("ctrl+v", "schema diff"),
+		),
+		ERDiagram: key.NewBinding(
+			key.WithKeys("ctrl+k"),
+			key.WithHelp("ctrl+k", "ER diagram"),
+		),
+		Audit: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "audit"),
+		),
+		Profiles: key.NewBinding(
+			key.WithKeys("ctrl+p"),
+			key.WithHelp("ctrl+p", "profiles"),
+		),
+	},
+	Browser: BrowserKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "down"),
+		),
+		Left: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("←/h", "left"),
+		),
+		Right: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("→/l", "right"),
+		),
+		Select: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "view data"),
+		),
+		Filter: key.NewBinding(
+			key.WithKeys("/", "f"),
+			key.WithHelp("[/]", "filter"),
+		),
+		Schema: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "schema"),
+		),
+		Refresh: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "refresh"),
+		),
+		Editor: key.NewBinding(
+			key.WithKeys("ctrl+e"),
+			key.WithHelp("ctrl+e", "editor"),
+		),
+		AIChat: key.NewBinding(
+			key.WithKeys("ctrl+a"),
+			key.WithHelp("ctrl+a", "ai chat"),
+		),
+		History: key.NewBinding(
+			key.WithKeys("ctrl+h"),
+			key.WithHelp("ctrl+h", "history"),
+		),
+		Disconnect: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "disconnect"),
+		),
+	},
+	Editor: EditorKeys{
+		Execute: key.NewBinding(
+			key.WithKeys("alt+enter"),
+			key.WithHelp(styles.KeyExecute, "run query"),
+		),
+		Autocomplete: key.NewBinding(
+			key.WithKeys("ctrl+@"),
+			key.WithHelp("ctrl+space", "autocomplete"),
+		),
+		Clear: key.NewBinding(
+			key.WithKeys("alt+l"),
+			key.WithHelp("alt+l", "clear"),
+		),
+		Format: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "format SQL"),
+		),
+		OpenEditor: key.NewBinding(
+			key.WithKeys("ctrl+o"),
+			key.WithHelp("ctrl+o", "open $EDITOR"),
+		),
+		Bookmarks: key.NewBinding(
+			key.WithKeys("ctrl+b"),
+			key.WithHelp("ctrl+b", "bookmarks"),
+		),
+		Explain: key.NewBinding(
+			key.WithKeys("ctrl+x"),
+			key.WithHelp("ctrl+x", "explain"),
+		),
+		NewTab: key.NewBinding(
+			key.WithKeys("ctrl+n"),
+			key.WithHelp("ctrl+n", "new tab"),
+		),
+		CloseTab: key.NewBinding(
+			key.WithKeys("ctrl+w"),
+			key.WithHelp("ctrl+w", "close tab"),
+		),
+		PrevTab: key.NewBinding(
+			key.WithKeys("shift+left"),
+			key.WithHelp("shift+←", "prev tab"),
+		),
+		NextTab: key.NewBinding(
+			key.WithKeys("shift+right"),
+			key.WithHelp("shift+→", "next tab"),
+		),
+	},
+	Results: ResultsKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "down"),
+		),
+		ColLeft: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("←/h", "col left"),
+		),
+		ColRight: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("→/l", "col right"),
+		),
+		NextPage: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n/p", "page"),
+		),
+		PrevPage: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("n/p", "page"),
+		),
+		Where: key.NewBinding(
+			key.WithKeys("w"),
+			key.WithHelp("w", "where"),
+		),
+		Columns: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "columns"),
+		),
+		AddRow: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "add row"),
+		),
+		EditRow: key.NewBinding(
+			key.WithKeys("u"),
+			key.WithHelp("u", "edit row"),
+		),
+		DeleteRow: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "delete row"),
+		),
+		Export: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "export"),
+		),
+		PageSize: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "page size"),
+		),
+		CustomSize: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("shift+s", "custom size"),
+		),
+		ViewCell: key.NewBinding(
+			key.WithKeys("z"),
+			key.WithHelp("z", "view cell"),
+		),
+	},
+	History: HistoryKeys{
+		Edit: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "edit"),
+		),
+		Rerun: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "re-run"),
+		),
+		ClearAll: key.NewBinding(
+			key.WithKeys("D"),
+			key.WithHelp("shift+d", "clear all"),
+		),
+	},
+	Chat: ChatKeys{
+		CycleFieldUp: key.NewBinding(
+			key.WithKeys("up"),
+			key.WithHelp("↑/↓", "cycle fields"),
+		),
+		CycleFieldDown: key.NewBinding(
+			key.WithKeys("down"),
+			key.WithHelp("↑/↓", "cycle fields"),
+		),
+		ChangeLeft: key.NewBinding(
+			key.WithKeys("left"),
+			key.WithHelp("←/→", "change selection"),
+		),
+		ChangeRight: key.NewBinding(
+			key.WithKeys("right"),
+			key.WithHelp("←/→", "change selection"),
+		),
+		Send: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "confirm/send/view"),
+		),
+		SelectPrevMsg: key.NewBinding(
+			key.WithKeys("ctrl+p"),
+			key.WithHelp("ctrl+p/n", "select message"),
+		),
+		SelectNextMsg: key.NewBinding(
+			key.WithKeys("ctrl+n"),
+			key.WithHelp("ctrl+p/n", "select message"),
+		),
+		FocusInput: key.NewBinding(
+			key.WithKeys("ctrl+i", "/"),
+			key.WithHelp("ctrl+i", "focus input"),
+		),
+		RevokeConsent: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "revoke consent"),
+		),
+		LoadModels: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("ctrl+l", "load models"),
+		),
+	},
+	Schema: SchemaKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "down"),
+		),
+		Toggle: key.NewBinding(
+			key.WithKeys("enter", " "),
+			key.WithHelp("enter/space", "expand"),
+		),
+		ViewData: key.NewBinding(
+			key.WithKeys("v"),
+			key.WithHelp("[v]", "view data"),
+		),
+		Filter: key.NewBinding(
+			key.WithKeys("/", "f"),
+			key.WithHelp("[/]", "filter"),
+		),
+		Refresh: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("[r]", "refresh"),
+		),
+	},
+	Columns: ColumnsKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "prev"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "next"),
+		),
+		Toggle: key.NewBinding(
+			key.WithKeys(" ", "x"),
+			key.WithHelp("space", "toggle"),
+		),
+		SelectAll: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("[a]", "all"),
+		),
+		SelectNone: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("[n]", "none"),
+		),
+		Apply: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "apply"),
+		),
+	},
+	WhereList: WhereListKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "prev"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "next"),
+		),
+		Add: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("[a]", "add cond"),
+		),
+		EditCond: key.NewBinding(
+			key.WithKeys("ctrl+e"),
+			key.WithHelp("ctrl+e", "edit"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("[d]", "delete"),
+		),
+		Apply: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "apply"),
+		),
+		NewGroup: key.NewBinding(
+			key.WithKeys("g"),
+			key.WithHelp("[g]", "new group"),
+		),
+		ToggleLogic: key.NewBinding(
+			key.WithKeys("t"),
+			key.WithHelp("[t]", "toggle AND/OR"),
+		),
+	},
+	WhereAdd: WhereAddKeys{
+		Prev: key.NewBinding(
+			key.WithKeys("up"),
+			key.WithHelp("↑", "prev"),
+		),
+		Next: key.NewBinding(
+			key.WithKeys("down"),
+			key.WithHelp("↓", "next"),
+		),
+		Change: key.NewBinding(
+			key.WithKeys("left", "right"),
+			key.WithHelp("← →", "change"),
+		),
+		Confirm: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "add"),
+		),
+	},
+	Export: ExportKeys{
+		Prev: key.NewBinding(
+			key.WithKeys("up", "k", "shift+tab"),
+			key.WithHelp("↑/k", "prev"),
+		),
+		Next: key.NewBinding(
+			key.WithKeys("down", "j", "tab"),
+			key.WithHelp("↓/j", "next"),
+		),
+		OptionLeft: key.NewBinding(
+			key.WithKeys("left"),
+			key.WithHelp("←", "prev option"),
+		),
+		OptionRight: key.NewBinding(
+			key.WithKeys("right"),
+			key.WithHelp("→", "next option"),
+		),
+		Export: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "select"),
+		),
+	},
+	ConnectionList: ConnectionListKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k", "shift+tab"),
+			key.WithHelp("↑/k", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j", "tab"),
+			key.WithHelp("↓/j", "down"),
+		),
+		Connect: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "connect"),
+		),
+		New: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("[n]", "new"),
+		),
+		DeleteConn: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("[d]", "delete"),
+		),
+		QuitEsc: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "quit"),
+		),
+	},
+	ConnectionForm: ConnectionFormKeys{
+		Navigate: key.NewBinding(
+			key.WithKeys("tab", "down"),
+			key.WithHelp("↑/↓/tab", "navigate"),
+		),
+		TypeLeft: key.NewBinding(
+			key.WithKeys("left"),
+			key.WithHelp("←/→", "change type"),
+		),
+		TypeRight: key.NewBinding(
+			key.WithKeys("right"),
+			key.WithHelp("←/→", "change type"),
+		),
+		ConnectForm: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "connect"),
+		),
+	},
+	Filter: FilterKeys{
+		CancelFilter: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "cancel filter"),
+		),
+		ApplyFilter: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "apply filter"),
+		),
+	},
+	SchemaSelect: SchemaSelectKeys{
+		NavLeft: key.NewBinding(
+			key.WithKeys("left", "up", "h", "k"),
+		),
+		NavRight: key.NewBinding(
+			key.WithKeys("right", "down", "l", "j"),
+		),
+		SelectSchema: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "select schema"),
+		),
+	},
+	Bookmarks: BookmarksKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "down"),
+		),
+		Load: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "load"),
+		),
+		Save: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("[s]", "save current"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("[d]", "delete"),
+		),
+	},
+	Audit: AuditKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("up/k", "prev issue"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("down/j", "next issue"),
+		),
+		DrillDown: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "drill down"),
+		),
+	},
+	SchemaDiff: SchemaDiffKeys{
+		PrevField: key.NewBinding(
+			key.WithKeys("shift+tab", "up", "k"),
+			key.WithHelp("shift+tab", "prev field"),
+		),
+		NextField: key.NewBinding(
+			key.WithKeys("tab", "down", "j"),
+			key.WithHelp("tab", "next field"),
+		),
+		OptionLeft: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("←/h", "previous"),
+		),
+		OptionRight: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("→/l", "next"),
+		),
+		Compare: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "compare"),
+		),
+		Edit: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("[e]", "edit"),
+		),
+		Recompare: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("[r]", "compare again"),
+		),
+		ScrollUp: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "scroll up"),
+		),
+		ScrollDown: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "scroll down"),
+		),
+	},
+	ERD: ERDKeys{
+		NextTable: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "next table"),
+		),
+		PrevTable: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "prev table"),
+		),
+		ToggleZoom: key.NewBinding(
+			key.WithKeys("z"),
+			key.WithHelp("[z]", "toggle zoom"),
+		),
+		ScrollUp: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "scroll up"),
+		),
+		ScrollDown: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "scroll down"),
+		),
+	},
+	Profiles: ProfilesKeys{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "down"),
+		),
+		Apply: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "apply"),
+		),
+		Save: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("[s]", "save current"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("[d]", "delete"),
+		),
+	},
+}
+func RenderBindingHelp(bindings ...key.Binding) string {
+	var pairs []string
+	for _, b := range bindings {
+		h := b.Help()
+		pairs = append(pairs, h.Key, h.Desc)
+	}
+	return styles.RenderHelp(pairs...)
+}
+func RenderBindingHelpWidth(width int, bindings ...key.Binding) string {
+	return renderBindingHelpWidth(width, true, bindings...)
+}
+func renderBindingHelpWidthNoHelp(width int, bindings ...key.Binding) string {
+	return renderBindingHelpWidth(width, false, bindings...)
+}
+func renderFooterHelpPairsWidth(width int, keys ...string) string {
+	return renderHelpPairsWidth(width, true, keys...)
+}
+func renderFooterHelpPairsWidthNoHelp(width int, keys ...string) string {
+	return renderHelpPairsWidth(width, false, keys...)
+}
+func renderBindingHelpWidth(width int, includeHelp bool, bindings ...key.Binding) string {
+	if includeHelp {
+		bindings = appendHelpBinding(bindings)
+	}
+	var pairs []string
+	for _, b := range bindings {
+		h := b.Help()
+		pairs = append(pairs, h.Key, h.Desc)
+	}
+	return renderHelpPairsWidth(width, false, pairs...)
+}
+func renderHelpPairsWidth(width int, includeHelp bool, keys ...string) string {
+	if width <= 0 {
+		width = 80
+	}
+	if includeHelp {
+		keys = appendHelpPair(keys)
+	}
+	return styles.RenderHelpWidth(width, keys...)
+}
+func appendHelpBinding(bindings []key.Binding) []key.Binding {
+	helpKey := Keys.Global.Help.Help().Key
+	for _, binding := range bindings {
+		if binding.Help().Key == helpKey {
+			return bindings
+		}
+	}
+	result := make([]key.Binding, 0, len(bindings)+1)
+	result = append(result, bindings...)
+	result = append(result, Keys.Global.Help)
+	return result
+}
+func appendHelpPair(keys []string) []string {
+	if len(keys) >= 2 {
+		helpKey := Keys.Global.Help.Help().Key
+		for i := 0; i+1 < len(keys); i += 2 {
+			if keys[i] == helpKey {
+				return keys
+			}
+		}
+	}
+	result := make([]string, 0, len(keys)+2)
+	result = append(result, keys...)
+	result = append(result, Keys.Global.Help.Help().Key, Keys.Global.Help.Help().Desc)
+	return result
+}

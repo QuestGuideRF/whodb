@@ -1,0 +1,1360 @@
+package graph
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+	"github.com/99designs/gqlgen/graphql"
+	"github.com/clidey/whodb/core/graph/model"
+	"github.com/clidey/whodb/core/src"
+	"github.com/clidey/whodb/core/src/analytics"
+	"github.com/clidey/whodb/core/src/auth"
+	"github.com/clidey/whodb/core/src/aws"
+	"github.com/clidey/whodb/core/src/azure"
+	"github.com/clidey/whodb/core/src/common"
+	"github.com/clidey/whodb/core/src/engine"
+	"github.com/clidey/whodb/core/src/env"
+	"github.com/clidey/whodb/core/src/envconfig"
+	"github.com/clidey/whodb/core/src/gcp"
+	"github.com/clidey/whodb/core/src/llm"
+	"github.com/clidey/whodb/core/src/log"
+	"github.com/clidey/whodb/core/src/mockdata"
+	"github.com/clidey/whodb/core/src/providers"
+	awsprovider "github.com/clidey/whodb/core/src/providers/aws"
+	azureprovider "github.com/clidey/whodb/core/src/providers/azure"
+	gcpprovider "github.com/clidey/whodb/core/src/providers/gcp"
+	"github.com/clidey/whodb/core/src/settings"
+	"github.com/clidey/whodb/core/src/source"
+	"github.com/clidey/whodb/core/src/sourcecatalog"
+	"github.com/clidey/whodb/core/src/version"
+)
+func (r *mutationResolver) LoginSource(ctx context.Context, credentials model.SourceLoginInput) (*model.StatusResponse, error) {
+	return performSourceLogin(ctx, sourceCredentialsFromInput(credentials), "")
+}
+func (r *mutationResolver) LoginWithSourceProfile(ctx context.Context, profile model.SourceProfileLoginInput) (*model.StatusResponse, error) {
+	sourceProfile, credentials, ok := src.FindSourceProfile(profile.ID)
+	if !ok {
+		return nil, errors.New("login profile does not exist or is not authorized")
+	}
+	credentials.Values = mergeCredentialValues(credentials.Values, recordInputsToMap(profile.Values))
+	return performSourceLogin(ctx, credentials, sourceProfile.Source)
+}
+func (r *mutationResolver) Logout(ctx context.Context) (*model.StatusResponse, error) {
+	creds := auth.GetSourceCredentials(ctx)
+	identity := strings.TrimSpace(analytics.MetadataFromContext(ctx).DistinctID)
+	hasIdentity := identity != "" && identity != "disabled"
+	hasProfile := false
+	sourceType := ""
+	if creds != nil {
+		hasProfile = creds.ID != nil && strings.TrimSpace(*creds.ID) != ""
+		sourceType = creds.SourceType
+	}
+	if hasIdentity {
+		analytics.CaptureWithDistinctID(ctx, identity, "logout.attempt", map[string]any{
+			"database_type":      sourceType,
+			"profile_id_present": hasProfile,
+		})
+	}
+	resp, err := auth.Logout(ctx)
+	if err != nil {
+		if hasIdentity {
+			analytics.CaptureError(ctx, "logout.execute", err, map[string]any{
+				"database_type":      sourceType,
+				"profile_id_present": hasProfile,
+			})
+		}
+		return nil, err
+	}
+	if hasIdentity {
+		analytics.CaptureWithDistinctID(ctx, identity, "logout.success", map[string]any{
+			"database_type":      sourceType,
+			"profile_id_present": hasProfile,
+		})
+	}
+	return resp, nil
+}
+func (r *mutationResolver) UpdateSettings(ctx context.Context, newSettings model.SettingsConfigInput) (*model.StatusResponse, error) {
+	var fields []settings.ISettingsField
+	if newSettings.MetricsEnabled != nil {
+		metricsEnabled := common.StrPtrToBool(newSettings.MetricsEnabled)
+		fields = append(fields, settings.MetricsEnabledField(metricsEnabled))
+		analytics.TrackMutation(ctx, "UpdateSettings.metrics", map[string]any{
+			"metrics_enabled": metricsEnabled,
+		})
+	}
+	updated := settings.UpdateSettings(fields...)
+	return &model.StatusResponse{
+		Status: updated,
+	}, nil
+}
+func (r *mutationResolver) CreateSourceObject(ctx context.Context, parent *model.SourceObjectRefInput, name string, fields []*model.RecordInput) (*model.StatusResponse, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	manager, ok := session.(source.ObjectManager)
+	if !ok {
+		return nil, errors.New("source object creation is not supported")
+	}
+	status, err := manager.CreateObject(ctx, sourceRefFromInput(parent), name, recordInputsToSourceRecords(fields))
+	if err != nil {
+		return nil, err
+	}
+	return &model.StatusResponse{Status: status}, nil
+}
+func (r *mutationResolver) UpdateSourceObject(ctx context.Context, ref model.SourceObjectRefInput, values []*model.RecordInput, updatedColumns []string) (*model.StatusResponse, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	manager, ok := session.(source.ObjectManager)
+	if !ok {
+		return nil, errors.New("source object updates are not supported")
+	}
+	status, err := manager.UpdateObject(ctx, *sourceRefFromInput(&ref), recordInputsToMap(values), updatedColumns)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StatusResponse{Status: status}, nil
+}
+func (r *mutationResolver) AddSourceRow(ctx context.Context, ref model.SourceObjectRefInput, values []*model.RecordInput) (*model.StatusResponse, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	manager, ok := session.(source.ObjectManager)
+	if !ok {
+		return nil, errors.New("source row inserts are not supported")
+	}
+	status, err := manager.AddRow(ctx, *sourceRefFromInput(&ref), recordInputsToSourceRecords(values))
+	if err != nil {
+		return nil, err
+	}
+	return &model.StatusResponse{Status: status}, nil
+}
+func (r *mutationResolver) DeleteSourceRow(ctx context.Context, ref model.SourceObjectRefInput, values []*model.RecordInput) (*model.StatusResponse, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	manager, ok := session.(source.ObjectManager)
+	if !ok {
+		return nil, errors.New("source row deletes are not supported")
+	}
+	status, err := manager.DeleteRow(ctx, *sourceRefFromInput(&ref), recordInputsToMap(values))
+	if err != nil {
+		return nil, err
+	}
+	return &model.StatusResponse{Status: status}, nil
+}
+func (r *mutationResolver) GenerateMockData(ctx context.Context, input model.MockDataGenerationInput) (*model.MockDataGenerationStatus, error) {
+	return generateMockDataForRef(ctx, input)
+}
+func (r *mutationResolver) ImportSQL(ctx context.Context, input model.ImportSQLInput) (*model.ImportResult, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runner, ok := session.(source.ScriptRunner)
+	if !ok {
+		return nil, errors.New("source scripts are not supported")
+	}
+	script := ""
+	if input.Script != nil {
+		script = *input.Script
+	}
+	hasScript := script != ""
+	hasFile := input.File != nil
+	if hasScript && hasFile {
+		return importResult(false, importErrorSQLSourceBoth), nil
+	}
+	if !hasScript && !hasFile {
+		return importResult(false, importErrorSQLSourceMissing), nil
+	}
+	if hasFile {
+		data, err := readUploadBytes(*input.File, maxImportFileSizeBytes)
+		if err != nil {
+			return importResult(false, importErrorSQLFileFailed), nil
+		}
+		script = string(data)
+	}
+	if int64(len([]byte(script))) > maxImportFileSizeBytes {
+		return importResult(false, importErrorSQLTooLarge), nil
+	}
+	_, err = runner.RunScript(ctx, script, true)
+	if err != nil {
+		if errors.Is(err, engine.ErrMultiStatementUnsupported) {
+			return importResult(false, importErrorSQLMultiStatementUnsupported), nil
+		}
+		log.WithError(err).Error("SQL import failed")
+		return importResult(false, importErrorSQLFailed), nil
+	}
+	return importResult(true, ""), nil
+}
+func (r *mutationResolver) ImportPreview(ctx context.Context, file graphql.Upload, options model.ImportFileOptions, ref *model.SourceObjectRefInput, useHeaderMapping *bool) (*model.ImportPreview, error) {
+	return importPreviewForRef(ctx, file, options, ref, useHeaderMapping)
+}
+func (r *mutationResolver) ImportSourceObjectFile(ctx context.Context, input model.ImportFileInput) (*model.ImportResult, error) {
+	return importSourceObjectFile(ctx, input)
+}
+func (r *mutationResolver) ExecuteConfirmedSQL(ctx context.Context, query string, operationType string) (*model.AIChatMessage, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runner, ok := session.(source.ScriptRunner)
+	if !ok {
+		return nil, errors.New("source scripts are not supported")
+	}
+	result, execErr := runner.RunScript(ctx, query, false)
+	message := &model.AIChatMessage{
+		Type:                 operationType,
+		Text:                 query,
+		RequiresConfirmation: false,
+	}
+	if execErr != nil {
+		message.Type = "error"
+		message.Text = execErr.Error()
+	} else {
+		var columns []*model.Column
+		for _, column := range result.Columns {
+			columns = append(columns, &model.Column{
+				Type: column.Type,
+				Name: column.Name,
+			})
+		}
+		message.Result = &model.RowsResult{
+			Columns: columns,
+			Rows:    result.Rows,
+		}
+	}
+	return message, nil
+}
+func (r *mutationResolver) GenerateChatTitle(ctx context.Context, input model.GenerateChatTitleInput) (*model.GenerateChatTitleResponse, error) {
+	return generateChatTitleImpl(ctx, input)
+}
+func (r *mutationResolver) AddAWSProvider(ctx context.Context, input model.AWSProviderInput) (*model.AWSProvider, error) {
+	if !env.IsAWSProviderEnabled {
+		return nil, aws.ErrAWSProviderDisabled
+	}
+	id := settings.GenerateProviderID(input.Name, input.Region)
+	authMethod := "default"
+	profileName := ""
+	if input.ProfileName != nil && *input.ProfileName != "" {
+		authMethod = "profile"
+		profileName = *input.ProfileName
+	}
+	discoverRDS := true
+	if input.DiscoverRds != nil {
+		discoverRDS = *input.DiscoverRds
+	}
+	discoverElastiCache := true
+	if input.DiscoverElastiCache != nil {
+		discoverElastiCache = *input.DiscoverElastiCache
+	}
+	discoverDocumentDB := true
+	if input.DiscoverDocumentDb != nil {
+		discoverDocumentDB = *input.DiscoverDocumentDb
+	}
+	cfg := &settings.AWSProviderConfig{
+		ID:                  id,
+		Name:                input.Name,
+		Region:              input.Region,
+		AuthMethod:          authMethod,
+		ProfileName:         profileName,
+		DiscoverRDS:         discoverRDS,
+		DiscoverElastiCache: discoverElastiCache,
+		DiscoverDocumentDB:  discoverDocumentDB,
+	}
+	state, err := settings.AddAWSProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return stateToAWSProvider(state), nil
+}
+func (r *mutationResolver) UpdateAWSProvider(ctx context.Context, id string, input model.AWSProviderInput) (*model.AWSProvider, error) {
+	if !env.IsAWSProviderEnabled {
+		return nil, aws.ErrAWSProviderDisabled
+	}
+	existing, err := settings.GetAWSProvider(id)
+	if err != nil {
+		return nil, err
+	}
+	authMethod := "default"
+	profileName := existing.Config.ProfileName
+	if input.ProfileName != nil {
+		profileName = *input.ProfileName
+	}
+	if profileName != "" {
+		authMethod = "profile"
+	}
+	discoverRDS := existing.Config.DiscoverRDS
+	if input.DiscoverRds != nil {
+		discoverRDS = *input.DiscoverRds
+	}
+	discoverElastiCache := existing.Config.DiscoverElastiCache
+	if input.DiscoverElastiCache != nil {
+		discoverElastiCache = *input.DiscoverElastiCache
+	}
+	discoverDocumentDB := existing.Config.DiscoverDocumentDB
+	if input.DiscoverDocumentDb != nil {
+		discoverDocumentDB = *input.DiscoverDocumentDb
+	}
+	cfg := &settings.AWSProviderConfig{
+		ID:                  id,
+		Name:                input.Name,
+		Region:              input.Region,
+		AuthMethod:          authMethod,
+		ProfileName:         profileName,
+		DiscoverRDS:         discoverRDS,
+		DiscoverElastiCache: discoverElastiCache,
+		DiscoverDocumentDB:  discoverDocumentDB,
+	}
+	state, err := settings.UpdateAWSProvider(id, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return stateToAWSProvider(state), nil
+}
+func (r *mutationResolver) TestAWSCredentials(ctx context.Context, input model.AWSProviderInput) (model.CloudProviderStatus, error) {
+	if !env.IsAWSProviderEnabled {
+		return model.CloudProviderStatusError, aws.ErrAWSProviderDisabled
+	}
+	authMethod := "default"
+	profileName := ""
+	if input.ProfileName != nil && *input.ProfileName != "" {
+		authMethod = "profile"
+		profileName = *input.ProfileName
+	}
+	log.Infof("TestAWSCredentials: testing region=%s, authMethod=%s, profileName=%s", input.Region, authMethod, profileName)
+	cfg := &awsprovider.Config{
+		ID:          "test-temp",
+		Name:        input.Name,
+		Region:      input.Region,
+		AuthMethod:  aws.AuthMethod(authMethod),
+		ProfileName: profileName,
+	}
+	provider, err := awsprovider.New(cfg)
+	if err != nil {
+		log.Errorf("TestAWSCredentials: failed to create provider: %v", err)
+		return model.CloudProviderStatusError, err
+	}
+	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := provider.TestConnection(testCtx); err != nil {
+		log.Warnf("TestAWSCredentials: connection test failed: %v", err)
+		return model.CloudProviderStatusError, err
+	}
+	log.Infof("TestAWSCredentials: connection successful for region=%s", input.Region)
+	return model.CloudProviderStatusConnected, nil
+}
+func (r *mutationResolver) AddGCPProvider(ctx context.Context, input model.GCPProviderInput) (*model.GCPProvider, error) {
+	if !env.IsGCPProviderEnabled {
+		return nil, gcp.ErrGCPProviderDisabled
+	}
+	id := settings.GenerateGCPProviderID(input.Name, input.Region)
+	authMethod := "default"
+	serviceAccountKeyPath := ""
+	if input.ServiceAccountKeyPath != nil && *input.ServiceAccountKeyPath != "" {
+		authMethod = "service-account-key"
+		serviceAccountKeyPath = *input.ServiceAccountKeyPath
+	}
+	discoverCloudSQL := true
+	if input.DiscoverCloudSQL != nil {
+		discoverCloudSQL = *input.DiscoverCloudSQL
+	}
+	discoverAlloyDB := true
+	if input.DiscoverAlloyDb != nil {
+		discoverAlloyDB = *input.DiscoverAlloyDb
+	}
+	discoverMemorystore := true
+	if input.DiscoverMemorystore != nil {
+		discoverMemorystore = *input.DiscoverMemorystore
+	}
+	cfg := &settings.GCPProviderConfig{
+		ID:                    id,
+		Name:                  input.Name,
+		ProjectID:             input.ProjectID,
+		Region:                input.Region,
+		AuthMethod:            authMethod,
+		ServiceAccountKeyPath: serviceAccountKeyPath,
+		DiscoverCloudSQL:      discoverCloudSQL,
+		DiscoverAlloyDB:       discoverAlloyDB,
+		DiscoverMemorystore:   discoverMemorystore,
+	}
+	state, err := settings.AddGCPProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return stateToGCPProvider(state), nil
+}
+func (r *mutationResolver) UpdateGCPProvider(ctx context.Context, id string, input model.GCPProviderInput) (*model.GCPProvider, error) {
+	if !env.IsGCPProviderEnabled {
+		return nil, gcp.ErrGCPProviderDisabled
+	}
+	existing, err := settings.GetGCPProvider(id)
+	if err != nil {
+		return nil, err
+	}
+	authMethod := "default"
+	serviceAccountKeyPath := existing.Config.ServiceAccountKeyPath
+	if input.ServiceAccountKeyPath != nil {
+		serviceAccountKeyPath = *input.ServiceAccountKeyPath
+	}
+	if serviceAccountKeyPath != "" {
+		authMethod = "service-account-key"
+	}
+	discoverCloudSQL := existing.Config.DiscoverCloudSQL
+	if input.DiscoverCloudSQL != nil {
+		discoverCloudSQL = *input.DiscoverCloudSQL
+	}
+	discoverAlloyDB := existing.Config.DiscoverAlloyDB
+	if input.DiscoverAlloyDb != nil {
+		discoverAlloyDB = *input.DiscoverAlloyDb
+	}
+	discoverMemorystore := existing.Config.DiscoverMemorystore
+	if input.DiscoverMemorystore != nil {
+		discoverMemorystore = *input.DiscoverMemorystore
+	}
+	cfg := &settings.GCPProviderConfig{
+		ID:                    id,
+		Name:                  input.Name,
+		ProjectID:             input.ProjectID,
+		Region:                input.Region,
+		AuthMethod:            authMethod,
+		ServiceAccountKeyPath: serviceAccountKeyPath,
+		DiscoverCloudSQL:      discoverCloudSQL,
+		DiscoverAlloyDB:       discoverAlloyDB,
+		DiscoverMemorystore:   discoverMemorystore,
+	}
+	state, err := settings.UpdateGCPProvider(id, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return stateToGCPProvider(state), nil
+}
+func (r *mutationResolver) TestGCPCredentials(ctx context.Context, input model.GCPProviderInput) (model.CloudProviderStatus, error) {
+	if !env.IsGCPProviderEnabled {
+		return model.CloudProviderStatusError, gcp.ErrGCPProviderDisabled
+	}
+	authMethod := "default"
+	serviceAccountKeyPath := ""
+	if input.ServiceAccountKeyPath != nil && *input.ServiceAccountKeyPath != "" {
+		authMethod = "service-account-key"
+		serviceAccountKeyPath = *input.ServiceAccountKeyPath
+	}
+	cfg := &gcpprovider.Config{
+		ID:                    "test-temp",
+		Name:                  input.Name,
+		ProjectID:             input.ProjectID,
+		Region:                input.Region,
+		AuthMethod:            gcp.AuthMethod(authMethod),
+		ServiceAccountKeyPath: serviceAccountKeyPath,
+	}
+	provider, err := gcpprovider.New(cfg)
+	if err != nil {
+		return model.CloudProviderStatusError, err
+	}
+	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := provider.TestConnection(testCtx); err != nil {
+		return model.CloudProviderStatusError, err
+	}
+	return model.CloudProviderStatusConnected, nil
+}
+func (r *mutationResolver) RefreshGCPProvider(ctx context.Context, id string) (*model.GCPProvider, error) {
+	if !env.IsGCPProviderEnabled {
+		return nil, gcp.ErrGCPProviderDisabled
+	}
+	state, err := settings.RefreshGCPProvider(id)
+	if err != nil {
+		return stateToGCPProvider(state), err
+	}
+	return stateToGCPProvider(state), nil
+}
+func (r *mutationResolver) RemoveCloudProvider(ctx context.Context, id string) (*model.StatusResponse, error) {
+	var err error
+	switch settings.GetProviderType(id) {
+	case providers.ProviderTypeAWS:
+		err = settings.RemoveAWSProvider(id)
+	case providers.ProviderTypeAzure:
+		err = settings.RemoveAzureProvider(id)
+	case providers.ProviderTypeGCP:
+		err = settings.RemoveGCPProvider(id)
+	default:
+		return &model.StatusResponse{Status: false}, fmt.Errorf("unknown provider: %s", id)
+	}
+	if err != nil {
+		return &model.StatusResponse{Status: false}, err
+	}
+	return &model.StatusResponse{Status: true}, nil
+}
+func (r *mutationResolver) TestCloudProvider(ctx context.Context, id string) (model.CloudProviderStatus, error) {
+	var status string
+	var err error
+	switch settings.GetProviderType(id) {
+	case providers.ProviderTypeAWS:
+		status, err = settings.TestAWSProvider(id)
+	case providers.ProviderTypeAzure:
+		status, err = settings.TestAzureProvider(id)
+	case providers.ProviderTypeGCP:
+		status, err = settings.TestGCPProvider(id)
+	default:
+		return model.CloudProviderStatusError, fmt.Errorf("unknown provider: %s", id)
+	}
+	if err != nil {
+		return model.CloudProviderStatusError, err
+	}
+	return mapCloudProviderStatus(status), nil
+}
+func (r *mutationResolver) RefreshCloudProvider(ctx context.Context, id string) (model.CloudProvider, error) {
+	switch settings.GetProviderType(id) {
+	case providers.ProviderTypeAWS:
+		if !env.IsAWSProviderEnabled {
+			return nil, aws.ErrAWSProviderDisabled
+		}
+		state, err := settings.RefreshAWSProvider(id)
+		if err != nil {
+			return nil, err
+		}
+		return stateToAWSProvider(state), nil
+	case providers.ProviderTypeAzure:
+		if !env.IsAzureProviderEnabled {
+			return nil, azure.ErrAzureProviderDisabled
+		}
+		state, err := settings.RefreshAzureProvider(id)
+		if err != nil {
+			return stateToAzureProvider(state), err
+		}
+		return stateToAzureProvider(state), nil
+	case providers.ProviderTypeGCP:
+		if !env.IsGCPProviderEnabled {
+			return nil, gcp.ErrGCPProviderDisabled
+		}
+		state, err := settings.RefreshGCPProvider(id)
+		if err != nil {
+			return nil, err
+		}
+		return stateToGCPProvider(state), nil
+	default:
+		return nil, fmt.Errorf("unknown provider: %s", id)
+	}
+}
+func (r *mutationResolver) GenerateRDSAuthToken(ctx context.Context, providerID string, endpoint string, port int, region string, username string) (string, error) {
+	if !env.IsAWSProviderEnabled {
+		return "", aws.ErrAWSProviderDisabled
+	}
+	log.Infof("GenerateRDSAuthToken: providerID=%s, endpoint=%s, port=%d, region=%s, username=%s", providerID, endpoint, port, region, username)
+	registry := providers.GetDefaultRegistry()
+	provider, err := registry.Get(providerID)
+	if err != nil {
+		log.Errorf("GenerateRDSAuthToken: provider not found: %v", err)
+		return "", err
+	}
+	awsProvider, ok := provider.(*awsprovider.Provider)
+	if !ok {
+		log.Errorf("GenerateRDSAuthToken: provider %s is not an AWS provider", providerID)
+		return "", fmt.Errorf("provider %s is not an AWS provider", providerID)
+	}
+	tokenCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	token, err := aws.GenerateRDSAuthToken(tokenCtx, awsProvider.GetAWSConfig(), endpoint, port, region, username)
+	if err != nil {
+		log.Errorf("GenerateRDSAuthToken: failed: %v", err)
+		return "", err
+	}
+	log.Infof("GenerateRDSAuthToken: token generated successfully (length=%d)", len(token))
+	return token, nil
+}
+func (r *mutationResolver) AddAzureProvider(ctx context.Context, input model.AzureProviderInput) (*model.AzureProvider, error) {
+	if !env.IsAzureProviderEnabled {
+		return nil, azure.ErrAzureProviderDisabled
+	}
+	id := settings.GenerateAzureProviderID(input.Name, input.SubscriptionID)
+	authMethod := "default"
+	if input.AuthMethod != nil && *input.AuthMethod != "" {
+		authMethod = *input.AuthMethod
+	} else if input.ClientID != nil && *input.ClientID != "" {
+		authMethod = "service-principal"
+	}
+	cfg := &settings.AzureProviderConfig{
+		ID:                 id,
+		Name:               input.Name,
+		SubscriptionID:     input.SubscriptionID,
+		TenantID:           derefStringOr(input.TenantID, ""),
+		ClientID:           derefStringOr(input.ClientID, ""),
+		AuthMethod:         authMethod,
+		ResourceGroup:      derefStringOr(input.ResourceGroup, ""),
+		DiscoverPostgreSQL: derefBoolOr(input.DiscoverPostgreSQL, true),
+		DiscoverMySQL:      derefBoolOr(input.DiscoverMySQL, true),
+		DiscoverRedis:      derefBoolOr(input.DiscoverRedis, true),
+		DiscoverCosmosDB:   derefBoolOr(input.DiscoverCosmosDb, true),
+	}
+	clientSecret := derefStringOr(input.ClientSecret, "")
+	state, err := settings.AddAzureProvider(cfg, clientSecret)
+	if err != nil {
+		return nil, err
+	}
+	return stateToAzureProvider(state), nil
+}
+func (r *mutationResolver) UpdateAzureProvider(ctx context.Context, id string, input model.AzureProviderInput) (*model.AzureProvider, error) {
+	if !env.IsAzureProviderEnabled {
+		return nil, azure.ErrAzureProviderDisabled
+	}
+	existing, err := settings.GetAzureProvider(id)
+	if err != nil {
+		return nil, err
+	}
+	authMethod := existing.Config.AuthMethod
+	if input.AuthMethod != nil && *input.AuthMethod != "" {
+		authMethod = *input.AuthMethod
+	} else if input.ClientID != nil && *input.ClientID != "" {
+		authMethod = "service-principal"
+	}
+	cfg := &settings.AzureProviderConfig{
+		ID:                 id,
+		Name:               input.Name,
+		SubscriptionID:     input.SubscriptionID,
+		TenantID:           derefStringOr(input.TenantID, existing.Config.TenantID),
+		ClientID:           derefStringOr(input.ClientID, existing.Config.ClientID),
+		AuthMethod:         authMethod,
+		ResourceGroup:      derefStringOr(input.ResourceGroup, existing.Config.ResourceGroup),
+		DiscoverPostgreSQL: derefBoolOr(input.DiscoverPostgreSQL, existing.Config.DiscoverPostgreSQL),
+		DiscoverMySQL:      derefBoolOr(input.DiscoverMySQL, existing.Config.DiscoverMySQL),
+		DiscoverRedis:      derefBoolOr(input.DiscoverRedis, existing.Config.DiscoverRedis),
+		DiscoverCosmosDB:   derefBoolOr(input.DiscoverCosmosDb, existing.Config.DiscoverCosmosDB),
+	}
+	clientSecret := derefStringOr(input.ClientSecret, "")
+	state, err := settings.UpdateAzureProvider(id, cfg, clientSecret)
+	if err != nil {
+		return nil, err
+	}
+	return stateToAzureProvider(state), nil
+}
+func (r *mutationResolver) TestAzureCredentials(ctx context.Context, input model.AzureProviderInput) (model.CloudProviderStatus, error) {
+	if !env.IsAzureProviderEnabled {
+		return model.CloudProviderStatusError, azure.ErrAzureProviderDisabled
+	}
+	authMethod := "default"
+	if input.AuthMethod != nil && *input.AuthMethod != "" {
+		authMethod = *input.AuthMethod
+	} else if input.ClientID != nil && *input.ClientID != "" {
+		authMethod = "service-principal"
+	}
+	cfg := &azureprovider.Config{
+		ID:             "test-temp",
+		Name:           input.Name,
+		SubscriptionID: input.SubscriptionID,
+		TenantID:       derefStringOr(input.TenantID, ""),
+		ClientID:       derefStringOr(input.ClientID, ""),
+		ClientSecret:   derefStringOr(input.ClientSecret, ""),
+		AuthMethod:     azure.AuthMethod(authMethod),
+	}
+	provider, err := azureprovider.New(cfg)
+	if err != nil {
+		return model.CloudProviderStatusError, err
+	}
+	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := provider.TestConnection(testCtx); err != nil {
+		return model.CloudProviderStatusError, err
+	}
+	return model.CloudProviderStatusConnected, nil
+}
+func (r *mutationResolver) RefreshAzureProvider(ctx context.Context, id string) (*model.AzureProvider, error) {
+	if !env.IsAzureProviderEnabled {
+		return nil, azure.ErrAzureProviderDisabled
+	}
+	state, err := settings.RefreshAzureProvider(id)
+	if err != nil {
+		return stateToAzureProvider(state), err
+	}
+	return stateToAzureProvider(state), nil
+}
+func (r *mutationResolver) GenerateAzureADToken(ctx context.Context, providerID string, sourceType string) (string, error) {
+	if !env.IsAzureProviderEnabled {
+		return "", azure.ErrAzureProviderDisabled
+	}
+	spec, ok := sourcecatalog.Find(sourceType)
+	if !ok {
+		return "", fmt.Errorf("unsupported source type: %s", sourceType)
+	}
+	scope, ok := sourcecatalog.ResolveAzureADScope(spec.ID, spec.Connector)
+	if !ok {
+		return "", fmt.Errorf("Azure AD authentication is not supported for source type: %s", sourceType)
+	}
+	registry := providers.GetDefaultRegistry()
+	provider, err := registry.Get(providerID)
+	if err != nil {
+		return "", err
+	}
+	azProvider, ok := provider.(*azureprovider.Provider)
+	if !ok {
+		return "", fmt.Errorf("provider %s is not an Azure provider", providerID)
+	}
+	tokenCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	token, err := azure.GenerateADToken(tokenCtx, azProvider.GetAzureCredential(), scope)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+func (r *mutationResolver) GenerateCloudSQLIAMAuthToken(ctx context.Context, providerID string, username string) (string, error) {
+	if !env.IsGCPProviderEnabled {
+		return "", gcp.ErrGCPProviderDisabled
+	}
+	registry := providers.GetDefaultRegistry()
+	provider, err := registry.Get(providerID)
+	if err != nil {
+		return "", err
+	}
+	gcpProvider, ok := provider.(*gcpprovider.Provider)
+	if !ok {
+		return "", fmt.Errorf("provider %s is not a GCP provider", providerID)
+	}
+	tokenCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	token, err := gcp.GenerateCloudSQLIAMAuthToken(tokenCtx, gcpProvider.GetConfig().ServiceAccountKeyPath, username)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+func (r *queryResolver) Version(ctx context.Context) (string, error) {
+	if env.ApplicationVersion != "" {
+		return env.ApplicationVersion, nil
+	}
+	return "development", nil
+}
+func (r *queryResolver) UpdateInfo(ctx context.Context) (*model.UpdateInfo, error) {
+	currentVersion := env.ApplicationVersion
+	if currentVersion == "" {
+		currentVersion = "development"
+	}
+	disabled := env.GetDisableUpdateCheck() || os.Getenv("SNAP") != ""
+	info := version.CheckForUpdate(currentVersion, disabled)
+	return &model.UpdateInfo{
+		CurrentVersion:  info.CurrentVersion,
+		LatestVersion:   info.LatestVersion,
+		UpdateAvailable: info.UpdateAvailable,
+		ReleaseURL:      info.ReleaseURL,
+	}, nil
+}
+func (r *queryResolver) Health(ctx context.Context) (*model.HealthStatus, error) {
+	status := &model.HealthStatus{
+		Server:   "healthy",
+		Database: "unavailable",
+	}
+	credentials := auth.GetSourceCredentials(ctx)
+	if credentials != nil && credentials.SourceType != "" {
+		_, session, err := getSourceSessionForContext(ctx)
+		if err == nil {
+			availability, ok := session.(source.AvailabilityChecker)
+			if ok {
+				healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				done := make(chan bool, 1)
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Errorf("Panic during health check for source: %v", r)
+							status.Database = "error"
+						}
+						done <- true
+					}()
+					if availability.IsAvailable(healthCtx) {
+						status.Database = "healthy"
+					} else {
+						status.Database = "error"
+					}
+				}()
+				select {
+				case <-done:
+				case <-healthCtx.Done():
+					status.Database = "error"
+				}
+			}
+		}
+	}
+	return status, nil
+}
+func (r *queryResolver) SourceProfiles(ctx context.Context) ([]*model.SourceProfile, error) {
+	return sourceProfilesToModel(src.GetSourceProfiles()), nil
+}
+func (r *queryResolver) SourceTypes(ctx context.Context) ([]*model.SourceType, error) {
+	specs := sourcecatalog.All()
+	types := make([]*model.SourceType, 0, len(specs))
+	for _, spec := range specs {
+		types = append(types, sourceTypeToModel(spec))
+	}
+	return types, nil
+}
+func (r *queryResolver) SourceFieldOptions(ctx context.Context, sourceType string, fieldKey string, values []*model.RecordInput) ([]string, error) {
+	spec, ok := sourcecatalog.Find(sourceType)
+	if !ok {
+		return nil, fmt.Errorf("unsupported source type: %s", sourceType)
+	}
+	credentials := &source.Credentials{
+		SourceType: sourceType,
+		Values:     recordInputsToMap(values),
+	}
+	if current := auth.GetSourceCredentials(ctx); current != nil && current.SourceType == sourceType {
+		credentials.Values = mergeCredentialValues(current.CloneValues(), credentials.Values)
+	}
+	session, err := source.Open(ctx, spec, credentials)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := session.(source.ConnectionFieldOptionsReader)
+	if !ok {
+		return []string{}, nil
+	}
+	return reader.ConnectionFieldOptions(ctx, fieldKey, credentials.Values)
+}
+func (r *queryResolver) SourceSessionMetadata(ctx context.Context) (*model.SourceSessionMetadata, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := session.Metadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return sourceSessionMetadataToModel(metadata), nil
+}
+func (r *queryResolver) SourceObjects(ctx context.Context, parent *model.SourceObjectRefInput, kinds []model.SourceObjectKind) ([]*model.SourceObject, error) {
+	spec, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	browser, ok := session.(source.SourceBrowser)
+	if !ok {
+		return nil, errors.New("source browsing is not supported")
+	}
+	kindFilter := make([]source.ObjectKind, 0, len(kinds))
+	for _, kind := range kinds {
+		kindFilter = append(kindFilter, source.ObjectKind(kind))
+	}
+	objects, err := browser.ListObjects(ctx, sourceRefFromInput(parent), kindFilter)
+	if err != nil {
+		return nil, err
+	}
+	return sourceObjectModels(spec, objects), nil
+}
+func (r *queryResolver) SourceObject(ctx context.Context, ref model.SourceObjectRefInput) (*model.SourceObject, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	browser, ok := session.(source.SourceBrowser)
+	if !ok {
+		return nil, errors.New("source browsing is not supported")
+	}
+	object, err := browser.GetObject(ctx, *sourceRefFromInput(&ref))
+	if err != nil {
+		return nil, err
+	}
+	return sourceObjectToModel(*object), nil
+}
+func (r *queryResolver) SourceRows(ctx context.Context, ref model.SourceObjectRefInput, where *model.WhereCondition, sort []*model.SortCondition, pageSize int, pageOffset int) (*model.RowsResult, error) {
+	if pageSize <= 0 {
+		return nil, fmt.Errorf("pageSize must be greater than 0")
+	}
+	if pageSize > env.MaxPageSize {
+		return nil, fmt.Errorf("pageSize must not exceed %d", env.MaxPageSize)
+	}
+	if pageOffset < 0 {
+		return nil, fmt.Errorf("pageOffset must not be negative")
+	}
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := session.(source.TabularReader)
+	if !ok {
+		return nil, errors.New("source rows are not supported")
+	}
+	resolvedRef := *sourceRefFromInput(&ref)
+	rowsResult, err := reader.ReadRows(ctx, resolvedRef, queryWhereConditionFromModel(where), querySortConditionsFromModel(sort), pageSize, pageOffset)
+	if err != nil {
+		return nil, err
+	}
+	columns, err := reader.Columns(ctx, resolvedRef)
+	if err != nil {
+		log.WithError(err).Warn("Failed to load source columns for row metadata")
+		return rowsResultToModel(rowsResult), nil
+	}
+	return mergeRowsColumns(rowsResult, columns), nil
+}
+func (r *queryResolver) SourceContent(ctx context.Context, ref model.SourceObjectRefInput) (*model.SourceContent, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := session.(source.ContentReader)
+	if !ok {
+		return nil, errors.New("source content is not supported")
+	}
+	content, err := reader.ReadContent(ctx, *sourceRefFromInput(&ref))
+	if err != nil {
+		return nil, err
+	}
+	return sourceContentToModel(content), nil
+}
+func (r *queryResolver) SourceColumns(ctx context.Context, ref model.SourceObjectRefInput) ([]*model.Column, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := session.(source.TabularReader)
+	if !ok {
+		return nil, errors.New("source columns are not supported")
+	}
+	columns, err := reader.Columns(ctx, *sourceRefFromInput(&ref))
+	if err != nil {
+		return nil, err
+	}
+	return MapColumnsToModel(columns), nil
+}
+func (r *queryResolver) SourceColumnsBatch(ctx context.Context, refs []*model.SourceObjectRefInput) ([]*model.SourceObjectColumns, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := session.(source.TabularReader)
+	if !ok {
+		return nil, errors.New("source columns are not supported")
+	}
+	sourceRefs := make([]source.ObjectRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		sourceRefs = append(sourceRefs, *sourceRefFromInput(ref))
+	}
+	results, err := reader.ColumnsBatch(ctx, sourceRefs)
+	if err != nil {
+		return nil, err
+	}
+	return sourceObjectColumnsToModel(results), nil
+}
+func (r *queryResolver) RunSourceQuery(ctx context.Context, query string) (*model.RowsResult, error) {
+	_, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runner, ok := session.(source.QueryRunner)
+	if !ok {
+		return nil, errors.New("source queries are not supported")
+	}
+	rowsResult, err := runner.RunQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return rowsResultToModel(rowsResult), nil
+}
+func (r *queryResolver) SourceGraph(ctx context.Context, ref *model.SourceObjectRefInput) ([]*model.GraphUnit, error) {
+	spec, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := session.(source.GraphReader)
+	if !ok {
+		return nil, errors.New("source graph is not supported")
+	}
+	resolvedRef := sourceRefFromInput(ref)
+	graphUnits, err := reader.ReadGraph(ctx, resolvedRef)
+	if err != nil {
+		return nil, err
+	}
+	return graphUnitsToModel(graphUnits, resolvedRef, spec.Contract.DefaultObjectKind), nil
+}
+func (r *queryResolver) AIProviders(ctx context.Context) ([]*model.AIProvider, error) {
+	chatProviders := envconfig.GetConfiguredChatProviders()
+	var aiProviders []*model.AIProvider
+	for _, provider := range chatProviders {
+		aiProviders = append(aiProviders, &model.AIProvider{
+			Type:                 provider.Type,
+			Name:                 provider.Name,
+			ProviderID:           provider.ProviderId,
+			IsEnvironmentDefined: true,
+			IsGeneric:            provider.IsGeneric,
+		})
+	}
+	return aiProviders, nil
+}
+func (r *queryResolver) AIModel(ctx context.Context, providerID *string, modelType string, token *string) ([]string, error) {
+	externalModel := &engine.ExternalModel{
+		Type: modelType,
+	}
+	if providerID != nil {
+		chatProviders := envconfig.GetConfiguredChatProviders()
+		found := false
+		for _, provider := range chatProviders {
+			if provider.ProviderId == *providerID {
+				externalModel.Token = provider.APIKey
+				found = true
+				if provider.IsGeneric {
+					for _, genericProvider := range env.GenericProviders {
+						if genericProvider.ProviderId == *providerID {
+							return genericProvider.Models, nil
+						}
+					}
+				}
+				break
+			}
+		}
+		if !found && token != nil {
+			externalModel.Token = *token
+		}
+	} else if token != nil {
+		externalModel.Token = *token
+	}
+	models, err := llm.ClientForModel(externalModel).GetSupportedModels()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"operation":   "GetSupportedModels",
+			"model_type":  modelType,
+			"provider_id": providerID,
+			"error":       err.Error(),
+		}).Error("AI operation failed")
+		return nil, err
+	}
+	return models, nil
+}
+func (r *queryResolver) AIChat(ctx context.Context, providerID *string, modelType string, token *string, ref *model.SourceObjectRefInput, input model.ChatInput) ([]*model.AIChatMessage, error) {
+	spec, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providerId := ""
+	if providerID != nil {
+		providerId = *providerID
+	}
+	requestToken := ""
+	if token != nil {
+		requestToken = *token
+	}
+	creds := envconfig.ResolveProviderCredentials(providerId, requestToken, "", modelType)
+	assistant, ok := session.(source.ModelAwareSourceAssistant)
+	if !ok {
+		return nil, errors.New("source chat is not supported")
+	}
+	modelConfig := &source.ExternalModel{
+		Type:     creds.ModelType,
+		Token:    creds.Token,
+		Model:    input.Model,
+		Endpoint: creds.Endpoint,
+	}
+	scope := sourceScopeForChat(spec, sourceRefFromInput(ref))
+	messages, err := assistant.ReplyWithModel(ctx, sourceRefFromInput(ref), input.PreviousConversation, input.Query, modelConfig)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"operation":     "Chat",
+			"scope":         scope,
+			"database_type": spec.ID,
+			"model":         input.Model,
+			"model_type":    modelType,
+			"provider_id":   providerID,
+			"query":         input.Query,
+			"error":         err.Error(),
+		}).Error("AI chat operation failed")
+		return nil, err
+	}
+	var chatResponse []*model.AIChatMessage
+	for _, message := range messages {
+		var result *model.RowsResult
+		if strings.HasPrefix(message.Type, "sql") && message.Result != nil {
+			var columns []*model.Column
+			for _, column := range message.Result.Columns {
+				columns = append(columns, &model.Column{
+					Type: column.Type,
+					Name: column.Name,
+				})
+			}
+			result = &model.RowsResult{
+				Columns: columns,
+				Rows:    message.Result.Rows,
+			}
+		}
+		chatResponse = append(chatResponse, &model.AIChatMessage{
+			Type:                 message.Type,
+			Result:               result,
+			Text:                 message.Text,
+			RequiresConfirmation: message.RequiresConfirmation,
+		})
+	}
+	return chatResponse, nil
+}
+func (r *queryResolver) SettingsConfig(ctx context.Context) (*model.SettingsConfig, error) {
+	currentSettings := settings.Get()
+	return &model.SettingsConfig{
+		MetricsEnabled:        &currentSettings.MetricsEnabled,
+		CloudProvidersEnabled: env.IsAWSProviderEnabled || env.IsAzureProviderEnabled || env.IsGCPProviderEnabled,
+		DisableCredentialForm: env.DisableCredentialForm,
+		MaxPageSize:           env.MaxPageSize,
+	}, nil
+}
+func (r *queryResolver) MockDataMaxRowCount(ctx context.Context) (int, error) {
+	return mockdata.GetMockDataGenerationMaxRowCount(), nil
+}
+func (r *queryResolver) AnalyzeMockDataDependencies(ctx context.Context, ref model.SourceObjectRefInput, rowCount int, fkDensityRatio *int) (*model.MockDataDependencyAnalysis, error) {
+	return analyzeMockDataDependenciesForRef(ctx, ref, rowCount, fkDensityRatio)
+}
+func (r *queryResolver) SSLStatus(ctx context.Context) (*model.SSLStatus, error) {
+	spec, session, err := getSourceSessionForContext(ctx)
+	if err != nil {
+		log.Debug("[SSL] SSLStatus resolver: no plugin context")
+		return nil, nil
+	}
+	reader, ok := session.(source.SecurityReader)
+	if !ok {
+		return nil, nil
+	}
+	log.Debugf("[SSL] SSLStatus resolver: querying SSL status for %s", spec.ID)
+	status, err := reader.SSLStatus(ctx)
+	if err != nil {
+		log.Warnf("[SSL] SSLStatus resolver: error getting SSL status: %v", err)
+		return nil, err
+	}
+	if status == nil {
+		log.Debugf("[SSL] SSLStatus resolver: SSL not applicable for %s", spec.ID)
+		return nil, nil
+	}
+	log.Infof("[SSL] SSLStatus resolver: %s connection SSL enabled=%t, mode=%s",
+		spec.ID, status.IsEnabled, status.Mode)
+	return &model.SSLStatus{
+		IsEnabled: status.IsEnabled,
+		Mode:      status.Mode,
+	}, nil
+}
+func (r *queryResolver) SourceQuerySuggestions(ctx context.Context, ref *model.SourceObjectRefInput) ([]*model.SourceQuerySuggestion, error) {
+	return sourceQuerySuggestionsForRef(ctx, ref)
+}
+func (r *queryResolver) CloudProviders(ctx context.Context) ([]model.CloudProvider, error) {
+	var result []model.CloudProvider
+	if env.IsAWSProviderEnabled {
+		for _, state := range settings.GetAWSProviders() {
+			result = append(result, stateToAWSProvider(state))
+		}
+	}
+	if env.IsAzureProviderEnabled {
+		for _, state := range settings.GetAzureProviders() {
+			result = append(result, stateToAzureProvider(state))
+		}
+	}
+	if env.IsGCPProviderEnabled {
+		for _, state := range settings.GetGCPProviders() {
+			result = append(result, stateToGCPProvider(state))
+		}
+	}
+	return result, nil
+}
+func (r *queryResolver) CloudProvider(ctx context.Context, id string) (model.CloudProvider, error) {
+	switch settings.GetProviderType(id) {
+	case providers.ProviderTypeAWS:
+		state, err := settings.GetAWSProvider(id)
+		if err != nil {
+			return nil, err
+		}
+		return stateToAWSProvider(state), nil
+	case providers.ProviderTypeAzure:
+		state, err := settings.GetAzureProvider(id)
+		if err != nil {
+			return nil, err
+		}
+		return stateToAzureProvider(state), nil
+	case providers.ProviderTypeGCP:
+		state, err := settings.GetGCPProvider(id)
+		if err != nil {
+			return nil, err
+		}
+		return stateToGCPProvider(state), nil
+	default:
+		return nil, nil
+	}
+}
+func (r *queryResolver) DiscoveredConnections(ctx context.Context) ([]*model.DiscoveredConnection, error) {
+	if !env.IsAWSProviderEnabled && !env.IsAzureProviderEnabled && !env.IsGCPProviderEnabled {
+		return []*model.DiscoveredConnection{}, nil
+	}
+	registry := providers.GetDefaultRegistry()
+	conns, err := registry.DiscoverAll(ctx)
+	result := make([]*model.DiscoveredConnection, 0, len(conns))
+	for _, conn := range conns {
+		result = append(result, discoveredConnectionToModel(&conn))
+	}
+	if err != nil {
+		log.Warn("Error discovering connections: ", err)
+		return result, err
+	}
+	return result, nil
+}
+func (r *queryResolver) ProviderConnections(ctx context.Context, providerID string) ([]*model.DiscoveredConnection, error) {
+	if !env.IsAWSProviderEnabled && !env.IsAzureProviderEnabled && !env.IsGCPProviderEnabled {
+		return []*model.DiscoveredConnection{}, nil
+	}
+	registry := providers.GetDefaultRegistry()
+	conns, err := registry.FilterByProvider(ctx, providerID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*model.DiscoveredConnection, 0, len(conns))
+	for _, conn := range conns {
+		result = append(result, discoveredConnectionToModel(&conn))
+	}
+	return result, nil
+}
+func (r *queryResolver) LocalAWSProfiles(ctx context.Context) ([]*model.LocalAWSProfile, error) {
+	if !env.IsAWSProviderEnabled {
+		return []*model.LocalAWSProfile{}, nil
+	}
+	localProfiles, err := aws.DiscoverLocalProfiles()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*model.LocalAWSProfile, len(localProfiles))
+	for i, profile := range localProfiles {
+		var region *string
+		if profile.Region != "" {
+			region = &profile.Region
+		}
+		result[i] = &model.LocalAWSProfile{
+			Name:      profile.Name,
+			Region:    region,
+			Source:    profile.Source,
+			AuthType:  profile.AuthType,
+			IsDefault: profile.IsDefault,
+		}
+	}
+	return result, nil
+}
+func (r *queryResolver) AWSRegions(ctx context.Context) ([]*model.AWSRegion, error) {
+	regions := aws.GetRegions()
+	result := make([]*model.AWSRegion, len(regions))
+	for i, region := range regions {
+		result[i] = &model.AWSRegion{
+			ID:          region.ID,
+			Description: region.Description,
+			Partition:   region.Partition,
+		}
+	}
+	return result, nil
+}
+func (r *queryResolver) AzureProviders(ctx context.Context) ([]*model.AzureProvider, error) {
+	if !env.IsAzureProviderEnabled {
+		return []*model.AzureProvider{}, nil
+	}
+	states := settings.GetAzureProviders()
+	result := make([]*model.AzureProvider, 0, len(states))
+	for _, state := range states {
+		result = append(result, stateToAzureProvider(state))
+	}
+	return result, nil
+}
+func (r *queryResolver) AzureProvider(ctx context.Context, id string) (*model.AzureProvider, error) {
+	if !env.IsAzureProviderEnabled {
+		return nil, nil
+	}
+	state, err := settings.GetAzureProvider(id)
+	if err != nil {
+		return nil, err
+	}
+	return stateToAzureProvider(state), nil
+}
+func (r *queryResolver) AzureSubscriptions(ctx context.Context) ([]*model.AzureSubscription, error) {
+	if !env.IsAzureProviderEnabled {
+		return []*model.AzureSubscription{}, nil
+	}
+	cred, err := azure.BuildCredentialFromConfig(&azure.AzureCredentialConfig{
+		SubscriptionID: "discovery",
+		AuthMethod:     azure.AuthMethodDefault,
+	})
+	if err != nil {
+		return nil, err
+	}
+	subs, err := azure.DiscoverSubscriptions(ctx, cred)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*model.AzureSubscription, 0, len(subs))
+	for _, sub := range subs {
+		result = append(result, &model.AzureSubscription{
+			ID:          sub.ID,
+			DisplayName: sub.DisplayName,
+			State:       sub.State,
+			TenantID:    sub.TenantID,
+		})
+	}
+	return result, nil
+}
+func (r *queryResolver) AzureRegions(ctx context.Context) ([]*model.AzureRegion, error) {
+	regions := azure.GetRegions()
+	result := make([]*model.AzureRegion, 0, len(regions))
+	for _, region := range regions {
+		result = append(result, &model.AzureRegion{
+			ID:          region.ID,
+			DisplayName: region.DisplayName,
+			Geography:   region.Geography,
+		})
+	}
+	return result, nil
+}
+func (r *queryResolver) GCPProviders(ctx context.Context) ([]*model.GCPProvider, error) {
+	if !env.IsGCPProviderEnabled {
+		return []*model.GCPProvider{}, nil
+	}
+	states := settings.GetGCPProviders()
+	result := make([]*model.GCPProvider, 0, len(states))
+	for _, state := range states {
+		result = append(result, stateToGCPProvider(state))
+	}
+	return result, nil
+}
+func (r *queryResolver) GCPProvider(ctx context.Context, id string) (*model.GCPProvider, error) {
+	if !env.IsGCPProviderEnabled {
+		return nil, nil
+	}
+	state, err := settings.GetGCPProvider(id)
+	if err != nil {
+		return nil, err
+	}
+	return stateToGCPProvider(state), nil
+}
+func (r *queryResolver) LocalGCPProjects(ctx context.Context) ([]*model.LocalGCPProject, error) {
+	if !env.IsGCPProviderEnabled {
+		return []*model.LocalGCPProject{}, nil
+	}
+	localProjects, err := gcp.DiscoverLocalProjects()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*model.LocalGCPProject, len(localProjects))
+	for i, project := range localProjects {
+		result[i] = &model.LocalGCPProject{
+			ProjectID: project.ProjectID,
+			Name:      project.Name,
+			Source:    project.Source,
+			IsDefault: project.IsDefault,
+		}
+	}
+	return result, nil
+}
+func (r *queryResolver) GCPRegions(ctx context.Context) ([]*model.GCPRegion, error) {
+	regions := gcp.GetRegions()
+	result := make([]*model.GCPRegion, len(regions))
+	for i, region := range regions {
+		result[i] = &model.GCPRegion{
+			ID:          region.ID,
+			Description: region.Description,
+		}
+	}
+	return result, nil
+}
+func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
+func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
+type mutationResolver struct{ *Resolver }
+type queryResolver struct{ *Resolver }

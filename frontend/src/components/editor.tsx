@@ -1,0 +1,411 @@
+import {Button, useTheme} from "@clidey/ux";
+import {json} from "@codemirror/lang-json";
+import {markdown} from "@codemirror/lang-markdown";
+import {sql} from "@codemirror/lang-sql";
+import {EditorState, RangeSet} from "@codemirror/state";
+import {oneDark} from "@codemirror/theme-one-dark";
+import {EditorView, gutter, GutterMarker, lineNumbers} from "@codemirror/view";
+import {EyeIcon, EyeSlashIcon} from "./heroicons";
+import classNames from "classnames";
+import {basicSetup} from "codemirror";
+import React, {FC, useCallback, useEffect, useMemo, useRef, useState} from "react";
+import ReactJson from "react-json-view";
+import MarkdownPreview from 'react-markdown';
+import remarkGfm from "remark-gfm";
+import {useApolloClient} from "@apollo/client/react";
+import { useTranslation } from "@/hooks/use-translation";
+
+let createSQLAutocomplete: ((options: { apolloClient: any; defaultSchema?: string }) => any[]) | undefined;
+
+export const registerEditorExtensions = (fns: {
+    createSQLAutocomplete?: (options: { apolloClient: any; defaultSchema?: string }) => any[];
+}) => {
+    if (fns.createSQLAutocomplete) {
+        createSQLAutocomplete = fns.createSQLAutocomplete;
+    }
+};
+import { useAppSelector } from "@/store/hooks";
+import { matchesShortcut, SHORTCUTS } from "@/utils/shortcuts";
+import { Tip } from "./tip";
+import { isValidSQLQuery } from '@/utils/query-utils';
+
+const findValidQueriesWithPositions = (doc: any): Array<{query: string, startLine: number}> => {
+  const fullText = doc.toString();
+  const lines = fullText.split('\n');
+  const results: Array<{query: string, startLine: number}> = [];
+
+  let currentQuery = '';
+  let queryStartLine = 1;
+  let inQuery = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+
+    if (!trimmedLine && !inQuery) {
+      continue;
+    }
+
+    if (!inQuery && isValidSQLQuery(trimmedLine)) {
+      currentQuery = trimmedLine;
+      queryStartLine = i + 1;
+      inQuery = true;
+    }
+    else if (inQuery) {
+      currentQuery += '\n' + line;
+    }
+
+    if (inQuery && line.includes(';')) {
+
+      const queryWithoutSemicolon = currentQuery.replace(/;$/, '').trim();
+
+      if (isValidSQLQuery(queryWithoutSemicolon)) {
+        results.push({
+          query: queryWithoutSemicolon,
+          startLine: queryStartLine
+        });
+      }
+
+      currentQuery = '';
+      inQuery = false;
+    }
+  }
+
+  if (inQuery && currentQuery.trim()) {
+    const queryWithoutSemicolon = currentQuery.trim();
+    if (isValidSQLQuery(queryWithoutSemicolon)) {
+      results.push({
+        query: queryWithoutSemicolon,
+        startLine: queryStartLine
+      });
+    }
+  }
+  return results;
+};
+
+type ICodeEditorProps = {
+  value: string;
+  setValue?: (value: string) => void;
+  language?: "sql" | "markdown" | "json";
+  onRun?: (lineText?: string) => void;
+  defaultShowPreview?: boolean;
+  disabled?: boolean;
+};
+
+class PlayButtonMarker extends GutterMarker {
+  constructor(private onRun: (lineText?: string) => void, private queryText: string, private label: string) {
+    super();
+  }
+
+  toDOM() {
+    const button = document.createElement("div");
+    button.className = "cm-play-button";
+    button.setAttribute("role", "button");
+    button.setAttribute("aria-label", this.label);
+    button.setAttribute("title", this.label);
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("xmlns", svgNS);
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("stroke-width", "1.5");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("class", "w-4 h-4");
+
+    const path = document.createElementNS(svgNS, "path");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute(
+        "d",
+        "M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347c-.75.412-1.667-.13-1.667-.986V5.653Z"
+    );
+
+    svg.appendChild(path);
+    button.appendChild(svg);
+
+    button.addEventListener("mouseenter", () => {
+      button.style.opacity = "1";
+      button.style.cursor = "pointer";
+      button.style.backgroundColor = "rgba(0,0,0,0.05)";
+    });
+
+    button.addEventListener("mouseleave", () => {
+      button.style.opacity = "0.6";
+      button.style.cursor = "default";
+      button.style.backgroundColor = "transparent";
+    });
+
+    button.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onRun(this.queryText);
+    });
+
+    return button;
+  }
+}
+
+export const CodeEditor: FC<ICodeEditorProps> = ({
+  value,
+  setValue,
+  language,
+  onRun,
+  defaultShowPreview = false,
+  disabled,
+}) => {
+  const { t } = useTranslation('components/editor');
+  const [showPreview, setShowPreview] = useState(defaultShowPreview);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const onRunReference = useRef<Function>();
+  const darkModeEnabled = useTheme().theme === "dark";
+  const apolloClient = useApolloClient();
+  const currentSchema = useAppSelector(state => state.database.schema);
+  const currentProfile = useAppSelector(state => state.auth.current);
+
+  const defaultSchema = currentSchema || currentProfile?.Database || '';
+
+  useEffect(() => {
+    onRunReference.current = onRun;
+  }, [onRun]);
+
+  useEffect(() => {
+    const handleExecuteTrigger = () => {
+
+      if (onRun && value) {
+        onRun(value);
+      }
+    };
+
+    window.addEventListener('menu:trigger-execute-query', handleExecuteTrigger);
+    return () => {
+      window.removeEventListener('menu:trigger-execute-query', handleExecuteTrigger);
+    };
+  }, [value, onRun]);
+
+  useEffect(() => {
+    if (viewRef.current && value !== viewRef.current.state.doc.toString()) {
+      viewRef.current.dispatch({
+        changes: { from: 0, to: viewRef.current.state.doc.length, insert: value },
+      });
+    }
+  }, [value]);
+
+  useEffect(() => {
+    if (editorRef.current === null) {
+        return;
+    }
+
+    const languageExtension = (() => {
+      switch (language) {
+        case "json":
+          return json();
+        case "markdown":
+          return markdown();
+        case "sql":
+          return sql();
+      }
+    })();
+
+    const createPlayButtonGutter = () => {
+      if (language !== "sql" || !onRun) {
+        return [];
+      }
+
+      return [
+        gutter({
+          class: "cm-play-gutter",
+          markers: (view) => {
+            const doc = view.state.doc;
+            const ranges = [];
+
+            const validQueries = findValidQueriesWithPositions(doc);
+
+            for (const { query, startLine } of validQueries) {
+              const startLineObj = doc.line(startLine);
+              if (startLineObj && startLineObj.text.trim().length > 0) {
+
+                const playMarker = new PlayButtonMarker((lineText) => {
+                  if (lineText) {
+                    onRunReference.current?.(lineText);
+                  }
+                }, query, t('runQuery'));
+
+                ranges.push({ from: startLineObj.from, to: startLineObj.from, value: playMarker });
+              }
+            }
+
+            return RangeSet.of(ranges);
+          },
+        }),
+      ];
+    };
+
+    const state = EditorState.create({
+        doc: value,
+        extensions: [
+          EditorView.domEventHandlers({
+              keydown(event) {
+                if (matchesShortcut(event, SHORTCUTS.clearEditor) && setValue != null) {
+                  view.dispatch({
+                    changes: { from: 0, to: view.state.doc.length, insert: "" }
+                  });
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return true;
+                }
+
+                if (matchesShortcut(event, SHORTCUTS.executeQuery) && onRunReference.current != null) {
+
+                      const selection = view.state.selection;
+                      let textToExecute = '';
+
+                      if (selection.main.empty) {
+
+                        textToExecute = view.state.doc.toString();
+                      } else {
+
+                        textToExecute = view.state.sliceDoc(selection.main.from, selection.main.to);
+                      }
+
+                      onRunReference.current?.(textToExecute);
+                      event.preventDefault();
+                      event.stopPropagation();
+                  }
+              },
+          }),
+            basicSetup,
+            languageExtension != null ? languageExtension : [],
+
+            (language === "sql" && createSQLAutocomplete && !(window as any).__E2E_DISABLE_AUTOCOMPLETE) ? createSQLAutocomplete({apolloClient, defaultSchema}) : [],
+            darkModeEnabled ? [oneDark, EditorView.theme({
+              ".cm-activeLine": { backgroundColor: "rgba(0,0,0,0.05) !important" },
+              ".cm-activeLineGutter": { backgroundColor: "rgba(0,0,0,0.05) !important" },
+              ".cm-play-gutter": {
+                width: "24px",
+                backgroundColor: "transparent",
+                borderRight: "1px solid rgba(0,0,0,0.1)",
+              },
+              ".cm-play-button": {
+                color: "#10b981",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+              },
+              ".dark .cm-play-button": {
+                color: "#14b8a6",
+              },
+              ".dark .cm-play-gutter": {
+                borderRight: "1px solid rgba(255,255,255,0.1)",
+              },
+            })] : [EditorView.theme({
+              ".cm-activeLine": { backgroundColor: "rgba(0,0,0,0.05) !important" },
+              ".cm-activeLineGutter": { backgroundColor: "rgba(0,0,0,0.05) !important" },
+              ".cm-play-gutter": {
+                width: "24px",
+                backgroundColor: "transparent",
+                borderRight: "1px solid rgba(0,0,0,0.1)",
+              },
+              ".cm-play-button": {
+                color: "#10b981",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+              },
+            })],
+            EditorView.updateListener.of((update) => {
+              if (update.docChanged && update.changes && setValue != null) {
+                  setValue(update.state.doc.toString());
+              }
+            }),
+            lineNumbers(),
+            EditorView.lineWrapping,
+            createPlayButtonGutter(),
+        ],
+    });
+
+    const view = new EditorView({
+        state,
+        parent: editorRef.current,
+    });
+    viewRef.current = view;
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, [language, apolloClient, darkModeEnabled, defaultSchema]);
+
+  const handlePreviewToggle = useCallback(() => {
+    setShowPreview((prev) => !prev);
+  }, []);
+
+  const hidePreview = useMemo(() => {
+    return language !== "markdown" && language !== "json";
+  }, [language]);
+
+  const children = useMemo(() => {
+    if (showPreview) {
+      if (language === "markdown") {
+        return (
+          <div className="h-full bg-white p-4 pl-8 dark:bg-[#252526] dark:backdrop-blur-md markdown-preview dark:*:text-neutral-300 overflow-y-auto">
+            { }
+            <MarkdownPreview remarkPlugins={[remarkGfm]}>{value}</MarkdownPreview>
+          </div>
+        );
+      }
+      if (language === "json") {
+        return (
+          <div className="h-full bg-white p-4 pl-8 dark:bg-[#252526] dark:backdrop-blur-md overflow-y-auto">
+            <ReactJson
+              src={JSON.parse(value)}
+              theme={darkModeEnabled ? "bright" : undefined}
+              style={{ height: "100%", backgroundColor: "unset" }}
+            />
+          </div>
+        );
+      }
+    }
+    return null;
+  }, [darkModeEnabled, showPreview, value, language]);
+
+  const actionButtons = useMemo(() => {
+    const label = showPreview ? t('hidePreview') : t('showPreview');
+    return (
+      <Tip className="w-fit">
+        <button
+          className="transition-all cursor-pointer hover:scale-110 hover:bg-gray-100/50 rounded-full p-1"
+          onClick={handlePreviewToggle}
+          aria-label={label}
+        >
+          {React.cloneElement(showPreview ? <EyeSlashIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />, {
+            className: "stroke-teal-500 w-8 h-8",
+          })}
+        </button>
+        <p>{label}</p>
+      </Tip>
+    );
+  }, [handlePreviewToggle, showPreview, t]);
+
+  return (
+    <div className={classNames("relative h-full w-full", {
+      "pointer-events-none": disabled,
+    })}>
+      {children}
+      <div ref={editorRef} className={classNames("h-full w-full [&>.cm-editor]:h-full [&>.cm-editor]:p-2 [&>.cm-editor]:!bg-neutral-100 [&_.cm-gutters]:!bg-neutral-100 dark:[&>.cm-editor]:!bg-[#252526] dark:[&_.cm-gutters]:!bg-[#252526] transition-all opacity-100", {
+        "opacity-0 pointer-events-none": hidePreview && disabled,
+        }
+      )} data-testid="code-editor"></div>
+      <div
+        className={classNames("absolute right-6 bottom-2 z-20", {
+          hidden: hidePreview,
+        })}>
+        {actionButtons}
+      </div>
+
+    </div>
+  );
+};

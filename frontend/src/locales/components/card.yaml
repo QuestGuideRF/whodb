@@ -1,0 +1,248 @@
+en_US:
+  expand: Expand
+  collapse: Collapse
+  details: Card Details
+ar_AE:
+  expand: "يوسع"
+  collapse: "ينهار"
+  details: "تفاصيل البطاقة"
+de_DE:
+  expand: "Expandieren"
+  collapse: "Zusammenbruch"
+  details: "Kartendetails"
+el_GR:
+  expand: "Διαστέλλω"
+  collapse: "Κατάρρευση"
+  details: "Στοιχεία κάρτας"
+en_GB:
+  expand: "Expand"
+  collapse: "Collapse"
+  details: "Card Details"
+es_ES:
+  expand: "Expandir"
+  collapse: "Colapsar"
+  details: "Detalles de la tarjeta"
+fi_FI:
+  expand: "Laajentaa"
+  collapse: "Romahdus"
+  details: "Kortin tiedot"
+fr_FR:
+  expand: "Développer"
+  collapse: "Effondrement"
+  details: "Détails de la carte"
+it_IT:
+  expand: "Espandere"
+  collapse: "Crollo"
+  details: "Dettagli della carta"
+iw_IL:
+  expand: "לְהַרְחִיב"
+  collapse: "הִתמוֹטְטוּת"
+  details: "פרטי כרטיס"
+ja_JP:
+  expand: "拡大する"
+  collapse: "崩壊"
+  details: "カード詳細"
+ko_KR:
+  expand: "확장하다"
+  collapse: "무너지다"
+  details: "카드 세부정보"
+nl_NL:
+  expand: "Uitbreiden"
+  collapse: "Instorten"
+  details: "Kaartgegevens"
+pl_PL:
+  expand: "Zwiększać"
+  collapse: "Zawalić się"
+  details: "Szczegóły karty"
+pt_BR:
+  expand: "Expandir"
+  collapse: "Colapso"
+  details: "Detalhes do cartão"
+ro_RO:
+  expand: "Extinde"
+  collapse: "Colaps"
+  details: "Detalii card"
+ru_RU:
+  expand: "Расширять"
+  collapse: "Крах"
+  details: "Детали карты"
+sk_SK:
+  expand: "Rozbaliť"
+  collapse: "kolaps"
+  details: "Podrobnosti karty"
+sv_SE:
+  expand: "Expandera"
+  collapse: "Kollapsa"
+  details: "Kortdetaljer"
+zh_CN:
+  expand: "扩张"
+  collapse: "坍塌"
+  details: "卡详情"
+zh_TW:
+  expand: "擴張"
+  collapse: "坍塌"
+  details: "卡詳情"
+bg_BG:
+  expand: "Разширяване"
+  collapse: "Свиване"
+  details: "Подробности за картата"
+bn_BD:
+  expand: "প্রসারিত করুন"
+  collapse: "সঙ্কুচিত"
+  details: "কার্ডের বিবরণ"
+ca_ES:
+  expand: "Ampliar"
+  collapse: "Col·lapse"
+  details: "Detalls de la targeta"
+cs_CZ:
+  expand: "Rozšířit"
+  collapse: "Kolaps"
+  details: "Podrobnosti karty"
+da_DK:
+  expand: "Udvide"
+  collapse: "Bryde sammen"
+  details: "Kortdetaljer"
+fa_IR:
+  expand: "گسترش دهید"
+  collapse: "فرو ریختن"
+  details: "مشخصات کارت"
+hi_IN:
+  expand: "बढ़ाना"
+  collapse: "गिर जाना"
+  details: "कार्ड विवरण"
+hr_HR:
+  expand: "Proširiti"
+  collapse: "Kolaps"
+  details: "Podaci o kartici"
+hu_HU:
+  expand: "Bontsa ki"
+  collapse: "Összeomlás"
+  details: "Kártya részletei"
+id_ID:
+  expand: "Memperluas"
+  collapse: "Runtuh"
+  details: "Detail Kartu"
+ms_MY:
+  expand: "Kembangkan"
+  collapse: "Runtuh"
+  details: "Butiran Kad"
+nb_NO:
+  expand: "Utvide"
+  collapse: "Kollapse"
+  details: "Kortdetaljer"
+sw_KE:
+  expand: "Panua"
+  collapse: "Kunja"
+  details: "Maelezo ya Kadi"
+ta_IN:
+  expand: "விரிவாக்கு"
+  collapse: "சுருக்கு"
+  details: "அட்டை விவரங்கள்"
+th_TH:
+  expand: "ขยาย"
+  collapse: "ทรุด"
+  details: "รายละเอียดบัตร"
+tr_TR:
+  expand: "Genişletmek"
+  collapse: "Yıkılmak"
+  details: "Kart Detayları"
+uk_UA:
+  expand: "Розгорнути"
+  collapse: "Згорнути"
+  details: "Реквізити картки"
+ur_PK:
+  expand: "پھیلائیں۔"
+  collapse: "سمٹنا"
+  details: "کارڈ کی تفصیلات"
+vi_VN:
+  expand: "Mở rộng"
+  collapse: "Sụp đổ"
+  details: "Chi tiết thẻ"
+af_ZA:
+  expand: "Brei uit"
+  collapse: "Ineenstort"
+  details: "Kaartbesonderhede"
+am_ET:
+  expand: "ዘርጋ"
+  collapse: "ሰብስብ"
+  details: "የካርድ ዝርዝሮች"
+az_AZ:
+  expand: "Genişləndirin"
+  collapse: "Yıxılma"
+  details: "Kart Təfərrüatları"
+et_EE:
+  expand: "Laienda"
+  collapse: "Ahenda"
+  details: "Kaardi üksikasjad"
+gu_IN:
+  expand: "વિસ્તૃત કરો"
+  collapse: "સંકુચિત કરો"
+  details: "કાર્ડ વિગતો"
+ha_NG:
+  expand: "Fadada"
+  collapse: "Rushewa"
+  details: "Cikakken Bayani"
+ka_GE:
+  expand: "გაფართოება"
+  collapse: "კოლაფსი"
+  details: "ბარათის დეტალები"
+km_KH:
+  expand: "ពង្រីក"
+  collapse: "ដួលរលំ"
+  details: "ព័ត៌មានលម្អិតអំពីកាត"
+kn_IN:
+  expand: "ವಿಸ್ತರಿಸು"
+  collapse: "ಕುಗ್ಗಿಸು"
+  details: "ಕಾರ್ಡ್ ವಿವರಗಳು"
+lt_LT:
+  expand: "Išskleisti"
+  collapse: "Sutraukti"
+  details: "Kortelės detalės"
+lv_LV:
+  expand: "Izvērst"
+  collapse: "Sakļaut"
+  details: "Kartes informācija"
+ml_IN:
+  expand: "വികസിപ്പിക്കുക"
+  collapse: "ചുരുക്കുക"
+  details: "കാർഡ് വിശദാംശങ്ങൾ"
+mr_IN:
+  expand: "विस्तृत करा"
+  collapse: "संकुचित करा"
+  details: "कार्ड तपशील"
+ne_NP:
+  expand: "विस्तार गर्नुहोस्"
+  collapse: "संक्षिप्त गर्नुहोस्"
+  details: "कार्ड विवरणहरू"
+pa_IN:
+  expand: "ਫੈਲਾਓ"
+  collapse: "ਸਮੇਟਣਾ"
+  details: "ਕਾਰਡ ਦੇ ਵੇਰਵੇ"
+si_LK:
+  expand: "පුළුල් කරන්න"
+  collapse: "හකුළන්න"
+  details: "කාඩ්පත් විස්තර"
+sl_SI:
+  expand: "Razširi"
+  collapse: "Strni"
+  details: "Podrobnosti kartice"
+sr_RS:
+  expand: "Прошири"
+  collapse: "Колапс"
+  details: "Детаљи картице"
+te_IN:
+  expand: "విస్తరించు"
+  collapse: "కుదించు"
+  details: "కార్డ్ వివరాలు"
+tl_PH:
+  expand: "Palawakin"
+  collapse: "I-collapse"
+  details: "Mga Detalye ng Card"
+uz_UZ:
+  expand: "Kengaytirish"
+  collapse: "Yiqilish"
+  details: "Karta tafsilotlari"
+yo_NG:
+  expand: "Faagun"
+  collapse: "Kọlulẹ"
+  details: "Awọn alaye kaadi"

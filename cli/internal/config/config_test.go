@@ -1,0 +1,591 @@
+package config
+import (
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+	"github.com/clidey/whodb/core/src/common/config"
+)
+func resetConfigDir() {
+	configDirOnce = sync.Once{}
+	configDir = ""
+	configDirErr = nil
+	config.ResetConfigPath()
+}
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg == nil {
+		t.Fatal("DefaultConfig returned nil")
+	}
+	if len(cfg.Connections) != 0 {
+		t.Errorf("Expected 0 connections, got %d", len(cfg.Connections))
+	}
+	if cfg.History.MaxEntries != 1000 {
+		t.Errorf("Expected MaxEntries 1000, got %d", cfg.History.MaxEntries)
+	}
+	if !cfg.History.Persist {
+		t.Error("Expected Persist to be true")
+	}
+	if cfg.Display.Theme != "dark" {
+		t.Errorf("Expected theme 'dark', got '%s'", cfg.Display.Theme)
+	}
+	if cfg.Display.PageSize != 50 {
+		t.Errorf("Expected PageSize 50, got %d", cfg.Display.PageSize)
+	}
+	if cfg.Query.TimeoutSeconds != 30 {
+		t.Errorf("Expected Query.TimeoutSeconds 30, got %d", cfg.Query.TimeoutSeconds)
+	}
+}
+func TestGetQueryTimeout(t *testing.T) {
+	tests := []struct {
+		name           string
+		timeoutSeconds int
+		expected       time.Duration
+	}{
+		{
+			name:           "default timeout",
+			timeoutSeconds: 30,
+			expected:       30 * time.Second,
+		},
+		{
+			name:           "custom timeout",
+			timeoutSeconds: 60,
+			expected:       60 * time.Second,
+		},
+		{
+			name:           "zero falls back to default",
+			timeoutSeconds: 0,
+			expected:       30 * time.Second,
+		},
+		{
+			name:           "negative falls back to default",
+			timeoutSeconds: -1,
+			expected:       30 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Query.TimeoutSeconds = tt.timeoutSeconds
+			result := cfg.GetQueryTimeout()
+			if result != tt.expected {
+				t.Errorf("GetQueryTimeout() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+func TestWorkspaceStateSetGetClear(t *testing.T) {
+	cfg := DefaultConfig()
+	workspace := &WorkspaceState{
+		ConnectionName: "test-db",
+		ProfileName:    "daily",
+		View:           "results",
+		Layout:         "Full",
+		FocusedPane:    1,
+	}
+	cfg.SetWorkspace(workspace)
+	got := cfg.GetWorkspace()
+	if got == nil {
+		t.Fatal("expected workspace to be set")
+	}
+	if got.ConnectionName != "test-db" || got.ProfileName != "daily" {
+		t.Fatalf("unexpected workspace contents: %#v", got)
+	}
+	cfg.ClearWorkspace()
+	if cfg.GetWorkspace() != nil {
+		t.Fatal("expected workspace to be cleared")
+	}
+}
+func TestAddConnection(t *testing.T) {
+	cfg := DefaultConfig()
+	conn := Connection{
+		Name:     "test-db",
+		Type:     "postgres",
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Database: "testdb",
+	}
+	cfg.AddConnection(conn)
+	if len(cfg.Connections) != 1 {
+		t.Fatalf("Expected 1 connection, got %d", len(cfg.Connections))
+	}
+	if cfg.Connections[0].Name != "test-db" {
+		t.Errorf("Expected connection name 'test-db', got '%s'", cfg.Connections[0].Name)
+	}
+}
+func TestAddConnection_Update(t *testing.T) {
+	cfg := DefaultConfig()
+	conn1 := Connection{
+		Name:     "test-db",
+		Type:     "postgres",
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Database: "testdb",
+	}
+	cfg.AddConnection(conn1)
+	conn2 := Connection{
+		Name:     "test-db",
+		Type:     "mysql",
+		Host:     "localhost",
+		Port:     3306,
+		Username: "newuser",
+		Database: "newdb",
+	}
+	cfg.AddConnection(conn2)
+	if len(cfg.Connections) != 1 {
+		t.Fatalf("Expected 1 connection after update, got %d", len(cfg.Connections))
+	}
+	if cfg.Connections[0].Type != "mysql" {
+		t.Errorf("Expected updated type 'mysql', got '%s'", cfg.Connections[0].Type)
+	}
+	if cfg.Connections[0].Port != 3306 {
+		t.Errorf("Expected updated port 3306, got %d", cfg.Connections[0].Port)
+	}
+}
+func TestRemoveConnection(t *testing.T) {
+	cfg := DefaultConfig()
+	conn1 := Connection{Name: "conn1", Type: "postgres", Host: "localhost"}
+	conn2 := Connection{Name: "conn2", Type: "mysql", Host: "localhost"}
+	cfg.AddConnection(conn1)
+	cfg.AddConnection(conn2)
+	if len(cfg.Connections) != 2 {
+		t.Fatalf("Expected 2 connections, got %d", len(cfg.Connections))
+	}
+	removed := cfg.RemoveConnection("conn1")
+	if !removed {
+		t.Error("Expected RemoveConnection to return true")
+	}
+	if len(cfg.Connections) != 1 {
+		t.Fatalf("Expected 1 connection after removal, got %d", len(cfg.Connections))
+	}
+	if cfg.Connections[0].Name != "conn2" {
+		t.Errorf("Expected remaining connection 'conn2', got '%s'", cfg.Connections[0].Name)
+	}
+}
+func TestRemoveConnection_NotFound(t *testing.T) {
+	cfg := DefaultConfig()
+	removed := cfg.RemoveConnection("nonexistent")
+	if removed {
+		t.Error("Expected RemoveConnection to return false for nonexistent connection")
+	}
+}
+func TestGetConnection(t *testing.T) {
+	cfg := DefaultConfig()
+	conn := Connection{
+		Name:     "test-db",
+		Type:     "postgres",
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Database: "testdb",
+	}
+	cfg.AddConnection(conn)
+	retrieved, err := cfg.GetConnection("test-db")
+	if err != nil {
+		t.Fatalf("GetConnection failed: %v", err)
+	}
+	if retrieved.Name != "test-db" {
+		t.Errorf("Expected name 'test-db', got '%s'", retrieved.Name)
+	}
+	if retrieved.Type != "postgres" {
+		t.Errorf("Expected type 'postgres', got '%s'", retrieved.Type)
+	}
+}
+func TestGetConnection_NotFound(t *testing.T) {
+	cfg := DefaultConfig()
+	_, err := cfg.GetConnection("nonexistent")
+	if err == nil {
+		t.Error("Expected error for nonexistent connection")
+	}
+}
+func TestSaveAndLoadConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", origHome)
+	resetConfigDir()
+	defer resetConfigDir()
+	cfg := DefaultConfig()
+	conn := Connection{
+		Name:     "test-db",
+		Type:     "postgres",
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Database: "testdb",
+	}
+	cfg.AddConnection(conn)
+	err := cfg.Save()
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	configPath, err := GetConfigPath()
+	if err != nil {
+		t.Fatalf("GetConfigPath failed: %v", err)
+	}
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Fatalf("Config file was not created at %s", configPath)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if len(loaded.Connections) != 1 {
+		t.Fatalf("Expected 1 connection in loaded config, got %d", len(loaded.Connections))
+	}
+	if loaded.Connections[0].Name != "test-db" {
+		t.Errorf("Expected connection name 'test-db', got '%s'", loaded.Connections[0].Name)
+	}
+}
+func TestLoadConfig_ReturnsDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", origHome)
+	resetConfigDir()
+	defer resetConfigDir()
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("LoadConfig returned nil")
+	}
+	if cfg.Display.Theme != "dark" {
+		t.Errorf("Expected default theme 'dark', got '%s'", cfg.Display.Theme)
+	}
+	if cfg.History.MaxEntries != 1000 {
+		t.Errorf("Expected default MaxEntries 1000, got %d", cfg.History.MaxEntries)
+	}
+}
+func TestAIConfigAccessors(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.GetLastAIProvider() != "" {
+		t.Errorf("Expected empty LastProvider, got '%s'", cfg.GetLastAIProvider())
+	}
+	if cfg.GetLastAIModel() != "" {
+		t.Errorf("Expected empty LastModel, got '%s'", cfg.GetLastAIModel())
+	}
+	cfg.SetLastAIProvider("Ollama")
+	if cfg.GetLastAIProvider() != "Ollama" {
+		t.Errorf("Expected LastProvider 'Ollama', got '%s'", cfg.GetLastAIProvider())
+	}
+	cfg.SetLastAIModel("llama3")
+	if cfg.GetLastAIModel() != "llama3" {
+		t.Errorf("Expected LastModel 'llama3', got '%s'", cfg.GetLastAIModel())
+	}
+	cfg.SetLastAIProvider("OpenAI")
+	cfg.SetLastAIModel("gpt-4")
+	if cfg.GetLastAIProvider() != "OpenAI" {
+		t.Errorf("Expected LastProvider 'OpenAI', got '%s'", cfg.GetLastAIProvider())
+	}
+	if cfg.GetLastAIModel() != "gpt-4" {
+		t.Errorf("Expected LastModel 'gpt-4', got '%s'", cfg.GetLastAIModel())
+	}
+}
+func TestPreferredTimeoutAccessors(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.GetPreferredTimeout() != 0 {
+		t.Errorf("Expected PreferredTimeout 0, got %d", cfg.GetPreferredTimeout())
+	}
+	cfg.SetPreferredTimeout(60)
+	if cfg.GetPreferredTimeout() != 60 {
+		t.Errorf("Expected PreferredTimeout 60, got %d", cfg.GetPreferredTimeout())
+	}
+	cfg.SetPreferredTimeout(300)
+	if cfg.GetPreferredTimeout() != 300 {
+		t.Errorf("Expected PreferredTimeout 300, got %d", cfg.GetPreferredTimeout())
+	}
+}
+func TestAIConfig_SaveAndLoad(t *testing.T) {
+	tempDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", origHome)
+	resetConfigDir()
+	defer resetConfigDir()
+	cfg := DefaultConfig()
+	cfg.SetLastAIProvider("Ollama")
+	cfg.SetLastAIModel("llama3")
+	cfg.SetPreferredTimeout(120)
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if loaded.GetLastAIProvider() != "Ollama" {
+		t.Errorf("Expected LastProvider 'Ollama' after reload, got '%s'", loaded.GetLastAIProvider())
+	}
+	if loaded.GetLastAIModel() != "llama3" {
+		t.Errorf("Expected LastModel 'llama3' after reload, got '%s'", loaded.GetLastAIModel())
+	}
+	if loaded.GetPreferredTimeout() != 120 {
+		t.Errorf("Expected PreferredTimeout 120 after reload, got %d", loaded.GetPreferredTimeout())
+	}
+}
+func TestGetConfigDir(t *testing.T) {
+	dir, err := GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir failed: %v", err)
+	}
+	if dir == "" {
+		t.Error("GetConfigDir returned empty string")
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Errorf("Config directory was not created: %s", dir)
+	}
+}
+func TestGetConfigPath(t *testing.T) {
+	path, err := GetConfigPath()
+	if err != nil {
+		t.Fatalf("GetConfigPath failed: %v", err)
+	}
+	if path == "" {
+		t.Error("GetConfigPath returned empty string")
+	}
+	if filepath.Ext(path) != ".json" {
+		t.Errorf("Expected .json extension, got '%s'", filepath.Ext(path))
+	}
+}
+func TestPageSizeAccessors(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.GetPageSize() != 50 {
+		t.Errorf("Expected default page size 50, got %d", cfg.GetPageSize())
+	}
+	cfg.SetPageSize(25)
+	if cfg.GetPageSize() != 25 {
+		t.Errorf("Expected page size 25, got %d", cfg.GetPageSize())
+	}
+	cfg.SetPageSize(100)
+	if cfg.GetPageSize() != 100 {
+		t.Errorf("Expected page size 100, got %d", cfg.GetPageSize())
+	}
+	cfg.SetPageSize(0)
+	if cfg.GetPageSize() != 50 {
+		t.Errorf("Expected default page size 50 for zero, got %d", cfg.GetPageSize())
+	}
+	cfg.SetPageSize(-1)
+	if cfg.GetPageSize() != 50 {
+		t.Errorf("Expected default page size 50 for negative, got %d", cfg.GetPageSize())
+	}
+}
+func TestReadOnlyAccessors(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.GetReadOnly() {
+		t.Error("Expected default ReadOnly to be false")
+	}
+	cfg.SetReadOnly(true)
+	if !cfg.GetReadOnly() {
+		t.Error("Expected ReadOnly to be true after SetReadOnly(true)")
+	}
+	cfg.SetReadOnly(false)
+	if cfg.GetReadOnly() {
+		t.Error("Expected ReadOnly to be false after SetReadOnly(false)")
+	}
+}
+func TestReadOnly_SaveAndLoad(t *testing.T) {
+	tempDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", origHome)
+	resetConfigDir()
+	defer resetConfigDir()
+	cfg := DefaultConfig()
+	cfg.SetReadOnly(true)
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if !loaded.GetReadOnly() {
+		t.Error("Expected ReadOnly to be true after reload")
+	}
+}
+func TestAddSavedQuery(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddSavedQuery("q1", "SELECT 1")
+	queries := cfg.GetSavedQueries()
+	if len(queries) != 1 {
+		t.Fatalf("Expected 1 saved query, got %d", len(queries))
+	}
+	if queries[0].Name != "q1" || queries[0].Query != "SELECT 1" {
+		t.Errorf("Unexpected query: %+v", queries[0])
+	}
+}
+func TestAddSavedQuery_Update(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddSavedQuery("q1", "SELECT 1")
+	cfg.AddSavedQuery("q1", "SELECT 2")
+	queries := cfg.GetSavedQueries()
+	if len(queries) != 1 {
+		t.Fatalf("Expected 1 saved query after update, got %d", len(queries))
+	}
+	if queries[0].Query != "SELECT 2" {
+		t.Errorf("Expected updated query 'SELECT 2', got '%s'", queries[0].Query)
+	}
+}
+func TestDeleteSavedQuery(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddSavedQuery("q1", "SELECT 1")
+	cfg.AddSavedQuery("q2", "SELECT 2")
+	deleted := cfg.DeleteSavedQuery("q1")
+	if !deleted {
+		t.Error("Expected DeleteSavedQuery to return true")
+	}
+	queries := cfg.GetSavedQueries()
+	if len(queries) != 1 {
+		t.Fatalf("Expected 1 saved query after deletion, got %d", len(queries))
+	}
+	if queries[0].Name != "q2" {
+		t.Errorf("Expected remaining query 'q2', got '%s'", queries[0].Name)
+	}
+}
+func TestDeleteSavedQuery_NotFound(t *testing.T) {
+	cfg := DefaultConfig()
+	deleted := cfg.DeleteSavedQuery("nonexistent")
+	if deleted {
+		t.Error("Expected DeleteSavedQuery to return false for nonexistent query")
+	}
+}
+func TestGetSavedQueries_Empty(t *testing.T) {
+	cfg := DefaultConfig()
+	queries := cfg.GetSavedQueries()
+	if queries != nil {
+		t.Errorf("Expected nil saved queries from default config, got %v", queries)
+	}
+}
+func TestSavedQueries_SaveAndLoad(t *testing.T) {
+	tempDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", origHome)
+	resetConfigDir()
+	defer resetConfigDir()
+	cfg := DefaultConfig()
+	cfg.AddSavedQuery("my query", "SELECT * FROM users")
+	cfg.AddSavedQuery("another", "INSERT INTO logs VALUES (1)")
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	queries := loaded.GetSavedQueries()
+	if len(queries) != 2 {
+		t.Fatalf("Expected 2 saved queries after reload, got %d", len(queries))
+	}
+	if queries[0].Name != "my query" || queries[0].Query != "SELECT * FROM users" {
+		t.Errorf("Unexpected first query after reload: %+v", queries[0])
+	}
+	if queries[1].Name != "another" || queries[1].Query != "INSERT INTO logs VALUES (1)" {
+		t.Errorf("Unexpected second query after reload: %+v", queries[1])
+	}
+}
+func TestAddProfile(t *testing.T) {
+	cfg := DefaultConfig()
+	p := Profile{Name: "dev", Connection: "my-db", Theme: "monokai", PageSize: 25, TimeoutSeconds: 60}
+	cfg.AddProfile(p)
+	profiles := cfg.GetProfiles()
+	if len(profiles) != 1 {
+		t.Fatalf("Expected 1 profile, got %d", len(profiles))
+	}
+	if profiles[0].Name != "dev" || profiles[0].Connection != "my-db" {
+		t.Errorf("Unexpected profile: %+v", profiles[0])
+	}
+}
+func TestAddProfile_Update(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddProfile(Profile{Name: "dev", Connection: "db1", Theme: "default"})
+	cfg.AddProfile(Profile{Name: "dev", Connection: "db2", Theme: "dracula"})
+	profiles := cfg.GetProfiles()
+	if len(profiles) != 1 {
+		t.Fatalf("Expected 1 profile after update, got %d", len(profiles))
+	}
+	if profiles[0].Connection != "db2" || profiles[0].Theme != "dracula" {
+		t.Errorf("Expected updated profile, got %+v", profiles[0])
+	}
+}
+func TestGetProfile(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddProfile(Profile{Name: "dev", Connection: "my-db"})
+	p := cfg.GetProfile("dev")
+	if p == nil {
+		t.Fatal("GetProfile returned nil for existing profile")
+	}
+	if p.Name != "dev" || p.Connection != "my-db" {
+		t.Errorf("Unexpected profile: %+v", p)
+	}
+}
+func TestGetProfile_NotFound(t *testing.T) {
+	cfg := DefaultConfig()
+	p := cfg.GetProfile("nonexistent")
+	if p != nil {
+		t.Errorf("Expected nil for nonexistent profile, got %+v", p)
+	}
+}
+func TestDeleteProfile(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AddProfile(Profile{Name: "p1", Connection: "db1"})
+	cfg.AddProfile(Profile{Name: "p2", Connection: "db2"})
+	deleted := cfg.DeleteProfile("p1")
+	if !deleted {
+		t.Error("Expected DeleteProfile to return true")
+	}
+	profiles := cfg.GetProfiles()
+	if len(profiles) != 1 {
+		t.Fatalf("Expected 1 profile after deletion, got %d", len(profiles))
+	}
+	if profiles[0].Name != "p2" {
+		t.Errorf("Expected remaining profile 'p2', got '%s'", profiles[0].Name)
+	}
+}
+func TestDeleteProfile_NotFound(t *testing.T) {
+	cfg := DefaultConfig()
+	deleted := cfg.DeleteProfile("nonexistent")
+	if deleted {
+		t.Error("Expected DeleteProfile to return false for nonexistent profile")
+	}
+}
+func TestGetProfiles_Empty(t *testing.T) {
+	cfg := DefaultConfig()
+	profiles := cfg.GetProfiles()
+	if profiles != nil {
+		t.Errorf("Expected nil profiles from default config, got %v", profiles)
+	}
+}
+func TestProfiles_SaveAndLoad(t *testing.T) {
+	tempDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", origHome)
+	resetConfigDir()
+	defer resetConfigDir()
+	cfg := DefaultConfig()
+	cfg.AddProfile(Profile{Name: "staging", Connection: "staging-db", Theme: "nord", PageSize: 100, TimeoutSeconds: 120})
+	cfg.AddProfile(Profile{Name: "prod", Connection: "prod-db", Theme: "catppuccin"})
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	profiles := loaded.GetProfiles()
+	if len(profiles) != 2 {
+		t.Fatalf("Expected 2 profiles after reload, got %d", len(profiles))
+	}
+	if profiles[0].Name != "staging" || profiles[0].Theme != "nord" || profiles[0].PageSize != 100 {
+		t.Errorf("Unexpected first profile after reload: %+v", profiles[0])
+	}
+	if profiles[1].Name != "prod" || profiles[1].Connection != "prod-db" {
+		t.Errorf("Unexpected second profile after reload: %+v", profiles[1])
+	}
+}

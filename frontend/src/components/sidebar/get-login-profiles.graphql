@@ -1,0 +1,14 @@
+query SourceProfiles {
+  SourceProfiles {
+    Alias: DisplayName
+    Id
+    Type: SourceType
+    Values {
+      Key
+      Value
+    }
+    IsEnvironmentDefined
+    Source
+    SSLConfigured
+  }
+}

@@ -1,0 +1,6 @@
+query GetDatabaseQuerySuggestions($ref: SourceObjectRefInput) {
+  DatabaseQuerySuggestions: SourceQuerySuggestions(ref: $ref) {
+    description
+    category
+  }
+}

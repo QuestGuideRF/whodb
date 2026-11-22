@@ -1,0 +1,148 @@
+package gorm_plugin
+import (
+	"database/sql"
+	"testing"
+	"github.com/clidey/whodb/core/src/engine"
+)
+func newTestPlugin() *GormPlugin {
+	p := &GormPlugin{}
+	p.Type = engine.DatabaseType_Postgres
+	p.GormPluginFunctions = p
+	return p
+}
+func TestConvertStringValue_NullableCaseInsensitive(t *testing.T) {
+	p := newTestPlugin()
+	tests := []struct {
+		name       string
+		value      string
+		columnType string
+		isNullable bool
+		wantErr    bool
+		checkVal   func(t *testing.T, val any)
+	}{
+		{
+			name:       "plain INT32 without nullable",
+			value:      "42",
+			columnType: "INT32",
+			checkVal: func(t *testing.T, val any) {
+				iv, ok := val.(int64)
+				if !ok {
+					t.Fatalf("expected int64, got %T", val)
+				}
+				if iv != 42 {
+					t.Fatalf("expected 42, got %d", iv)
+				}
+			},
+		},
+		{
+			name:       "empty value for nullable INTEGER via isNullable param",
+			value:      "",
+			columnType: "INTEGER",
+			isNullable: true,
+			checkVal: func(t *testing.T, val any) {
+				nv, ok := val.(sql.NullInt64)
+				if !ok {
+					t.Fatalf("expected sql.NullInt64, got %T", val)
+				}
+				if nv.Valid {
+					t.Fatalf("expected NullInt64 with Valid=false, got %+v", nv)
+				}
+			},
+		},
+		{
+			name:       "empty value for non-nullable INTEGER errors",
+			value:      "",
+			columnType: "INTEGER",
+			isNullable: false,
+			wantErr:    true,
+		},
+		{
+			name:       "empty value for nullable FLOAT via isNullable param",
+			value:      "",
+			columnType: "FLOAT",
+			isNullable: true,
+			checkVal: func(t *testing.T, val any) {
+				nv, ok := val.(sql.NullFloat64)
+				if !ok {
+					t.Fatalf("expected sql.NullFloat64, got %T", val)
+				}
+				if nv.Valid {
+					t.Fatalf("expected NullFloat64 with Valid=false, got %+v", nv)
+				}
+			},
+		},
+		{
+			name:       "empty value for nullable TEXT via isNullable param",
+			value:      "",
+			columnType: "TEXT",
+			isNullable: true,
+			checkVal: func(t *testing.T, val any) {
+				nv, ok := val.(sql.NullString)
+				if !ok {
+					t.Fatalf("expected sql.NullString, got %T", val)
+				}
+				if nv.Valid {
+					t.Fatalf("expected NullString with Valid=false, got %+v", nv)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val, err := p.ConvertStringValue(tt.value, tt.columnType, tt.isNullable)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.checkVal != nil {
+				tt.checkVal(t, val)
+			}
+		})
+	}
+}
+func TestConvertArrayValue_NoInfiniteRecursion(t *testing.T) {
+	p := newTestPlugin()
+	tests := []struct {
+		name       string
+		value      string
+		columnType string
+		wantLen    int
+		wantErr    bool
+	}{
+		{
+			name:       "ARRAY(INT32) uppercase",
+			value:      "[100, 200]",
+			columnType: "ARRAY(INT32)",
+			wantLen:    2,
+		},
+		{
+			name:       "Array(Int32) mixed case",
+			value:      "[1, 2, 3]",
+			columnType: "Array(Int32)",
+			wantLen:    3,
+		},
+		{
+			name:       "ARRAY(INT32) empty",
+			value:      "[]",
+			columnType: "ARRAY(INT32)",
+			wantLen:    0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val, err := p.ConvertArrayValue(tt.value, tt.columnType)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			arr, ok := val.([]any)
+			if !ok {
+				t.Fatalf("expected []any, got %T", val)
+			}
+			if len(arr) != tt.wantLen {
+				t.Fatalf("expected %d elements, got %d: %v", tt.wantLen, len(arr), arr)
+			}
+		})
+	}
+}

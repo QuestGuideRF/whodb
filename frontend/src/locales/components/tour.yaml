@@ -1,0 +1,310 @@
+en_US:
+  next: Next
+  previous: Previous
+  skip: Skip
+  finish: Finish
+ar_AE:
+  next: "التالي"
+  previous: "سابق"
+  skip: "يتخطى"
+  finish: "ينهي"
+de_DE:
+  next: "Nächste"
+  previous: "Vorherige"
+  skip: "Überspringen"
+  finish: "Beenden"
+el_GR:
+  next: "Επόμενος"
+  previous: "Προηγούμενος"
+  skip: "Παραλείπω"
+  finish: "Φινίρισμα"
+en_GB:
+  next: "Next"
+  previous: "Previous"
+  skip: "Skip"
+  finish: "Finish"
+es_ES:
+  next: "Próxima"
+  previous: "Previa"
+  skip: "Saltar"
+  finish: "Finalizar"
+fi_FI:
+  next: "Seuraavaksi"
+  previous: "Edellinen"
+  skip: "Ohita"
+  finish: "Valmis"
+fr_FR:
+  next: "Suivante"
+  previous: "Précédente"
+  skip: "Sauter"
+  finish: "Finition"
+it_IT:
+  next: "Prossima"
+  previous: "Precedente"
+  skip: "Saltare"
+  finish: "Fine"
+iw_IL:
+  next: "הַבָּא"
+  previous: "קוֹדֵם"
+  skip: "לְדַלֵג"
+  finish: "סִיוּם"
+ja_JP:
+  next: "次"
+  previous: "前の"
+  skip: "スキップ"
+  finish: "仕上げる"
+ko_KR:
+  next: "다음"
+  previous: "이전의"
+  skip: "건너뛰다"
+  finish: "마치다"
+nl_NL:
+  next: "Volgende"
+  previous: "Vorig"
+  skip: "Overslaan"
+  finish: "Finish"
+pl_PL:
+  next: "Następny"
+  previous: "Poprzedni"
+  skip: "Pominąć"
+  finish: "Skończyć"
+pt_BR:
+  next: "Próxima"
+  previous: "Anterior"
+  skip: "Pular"
+  finish: "Terminar"
+ro_RO:
+  next: "Următorul"
+  previous: "Anterior"
+  skip: "Sari peste"
+  finish: "Termina"
+ru_RU:
+  next: "Следующий"
+  previous: "Предыдущий"
+  skip: "Пропускать"
+  finish: "Заканчивать"
+sk_SK:
+  next: "Ďalej"
+  previous: "Predchádzajúce"
+  skip: "Preskočiť"
+  finish: "Dokončiť"
+sv_SE:
+  next: "Nästa"
+  previous: "Tidigare"
+  skip: "Hoppa"
+  finish: "Avsluta"
+zh_CN:
+  next: "下一个"
+  previous: "以前的"
+  skip: "跳过"
+  finish: "结束"
+zh_TW:
+  next: "下一個"
+  previous: "以前的"
+  skip: "跳過"
+  finish: "結束"
+bg_BG:
+  next: "Следваща"
+  previous: "Предишен"
+  skip: "Пропускане"
+  finish: "Завършете"
+bn_BD:
+  next: "পরবর্তী"
+  previous: "আগের"
+  skip: "এড়িয়ে যান"
+  finish: "শেষ করুন"
+ca_ES:
+  next: "A continuació"
+  previous: "Anterior"
+  skip: "Saltar"
+  finish: "Acabar"
+cs_CZ:
+  next: "Další"
+  previous: "Předchozí"
+  skip: "Přeskočit"
+  finish: "Dokončit"
+da_DK:
+  next: "Næste"
+  previous: "Tidligere"
+  skip: "Springe"
+  finish: "Slutte"
+fa_IR:
+  next: "بعدی"
+  previous: "قبلی"
+  skip: "پرش کنید"
+  finish: "پایان"
+hi_IN:
+  next: "अगला"
+  previous: "पहले का"
+  skip: "छोडना"
+  finish: "खत्म करना"
+hr_HR:
+  next: "Sljedeći"
+  previous: "Prethodno"
+  skip: "Preskočiti"
+  finish: "Završiti"
+hu_HU:
+  next: "Következő"
+  previous: "Előző"
+  skip: "Kihagyás"
+  finish: "Befejezés"
+id_ID:
+  next: "Berikutnya"
+  previous: "Sebelumnya"
+  skip: "Melewati"
+  finish: "Menyelesaikan"
+ms_MY:
+  next: "Seterusnya"
+  previous: "Sebelumnya"
+  skip: "Langkau"
+  finish: "Selesai"
+nb_NO:
+  next: "Neste"
+  previous: "Tidligere"
+  skip: "Hopp over"
+  finish: "Fullfør"
+sw_KE:
+  next: "Inayofuata"
+  previous: "Iliyotangulia"
+  skip: "Ruka"
+  finish: "Maliza"
+ta_IN:
+  next: "அடுத்து"
+  previous: "முந்தைய"
+  skip: "தவிர்க்கவும்"
+  finish: "முடிக்கவும்"
+th_TH:
+  next: "ต่อไป"
+  previous: "ก่อนหน้า"
+  skip: "ข้าม"
+  finish: "เสร็จ"
+tr_TR:
+  next: "Sonraki"
+  previous: "Öncesi"
+  skip: "Atlamak"
+  finish: "Sona ermek"
+uk_UA:
+  next: "Далі"
+  previous: "Попередній"
+  skip: "Пропустити"
+  finish: "Закінчити"
+ur_PK:
+  next: "اگلا"
+  previous: "پچھلا"
+  skip: "چھوڑیں۔"
+  finish: "ختم کرنا"
+vi_VN:
+  next: "Kế tiếp"
+  previous: "Trước"
+  skip: "Nhảy"
+  finish: "Hoàn thành"
+af_ZA:
+  next: "Volgende"
+  previous: "Vorige"
+  skip: "Slaan oor"
+  finish: "Voltooi"
+am_ET:
+  next: "ቀጥሎ"
+  previous: "ቀዳሚ"
+  skip: "ዝለል"
+  finish: "ጨርስ"
+az_AZ:
+  next: "Sonrakı"
+  previous: "Əvvəlki"
+  skip: "Keç"
+  finish: "Bitir"
+et_EE:
+  next: "Edasi"
+  previous: "Eelmine"
+  skip: "Jäta vahele"
+  finish: "Lõpeta"
+gu_IN:
+  next: "આગળ"
+  previous: "ગત"
+  skip: "છોડો"
+  finish: "સમાપ્ત કરો"
+ha_NG:
+  next: "Na gaba"
+  previous: "A baya"
+  skip: "Tsallake"
+  finish: "Gama"
+ka_GE:
+  next: "შემდეგი"
+  previous: "წინა"
+  skip: "გამოტოვება"
+  finish: "დასრულება"
+km_KH:
+  next: "បន្ទាប់"
+  previous: "មុន"
+  skip: "រំលង"
+  finish: "បញ្ចប់"
+kn_IN:
+  next: "ಮುಂದೆ"
+  previous: "ಹಿಂದಿನ"
+  skip: "ಬಿಟ್ಟುಬಿಡಿ"
+  finish: "ಮುಗಿಸು"
+lt_LT:
+  next: "Kitas"
+  previous: "Ankstesnis"
+  skip: "Praleisti"
+  finish: "Baigti"
+lv_LV:
+  next: "Tālāk"
+  previous: "Iepriekšējais"
+  skip: "Izlaist"
+  finish: "Pabeigt"
+ml_IN:
+  next: "അടുത്തത്"
+  previous: "മുമ്പത്തെ"
+  skip: "ഒഴിവാക്കുക"
+  finish: "പൂർത്തിയാക്കുക"
+mr_IN:
+  next: "पुढे"
+  previous: "मागील"
+  skip: "वगळा"
+  finish: "समाप्त करा"
+ne_NP:
+  next: "अर्को"
+  previous: "अघिल्लो"
+  skip: "छोड्नुहोस्"
+  finish: "समाप्त गर्नुहोस्"
+pa_IN:
+  next: "ਅਗਲਾ"
+  previous: "ਪਿਛਲਾ"
+  skip: "ਛੱਡੋ"
+  finish: "ਸਮਾਪਤ"
+si_LK:
+  next: "ඊළඟ"
+  previous: "පෙර"
+  skip: "මඟ හරින්න"
+  finish: "අවසන් කරන්න"
+sl_SI:
+  next: "Naprej"
+  previous: "Prejšnja"
+  skip: "Preskoči"
+  finish: "Končaj"
+sr_RS:
+  next: "Следеће"
+  previous: "Претходно"
+  skip: "Скип"
+  finish: "Заврши"
+te_IN:
+  next: "తదుపరి"
+  previous: "మునుపటి"
+  skip: "దాటవేయి"
+  finish: "ముగించు"
+tl_PH:
+  next: "Susunod"
+  previous: "Nakaraang"
+  skip: "Laktawan"
+  finish: "Tapusin"
+uz_UZ:
+  next: "Keyingisi"
+  previous: "Oldingi"
+  skip: "Oʻtkazib yuborish"
+  finish: "Tugatish"
+yo_NG:
+  next: "Itele"
+  previous: "Ti tẹlẹ"
+  skip: "Rekọja"
+  finish: "Pari"

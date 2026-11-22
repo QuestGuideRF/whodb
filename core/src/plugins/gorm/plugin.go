@@ -1,0 +1,527 @@
+package gorm_plugin
+import (
+	"database/sql"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+	"github.com/clidey/whodb/core/src/common"
+	"github.com/clidey/whodb/core/src/engine"
+	"github.com/clidey/whodb/core/src/log"
+	"github.com/clidey/whodb/core/src/plugins"
+	queryast "github.com/clidey/whodb/core/src/query"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+type GormPlugin struct {
+	engine.Plugin
+	GormPluginFunctions
+	errorHandler *ErrorHandler
+}
+func (p *GormPlugin) InitPlugin() {
+	if p.errorHandler == nil {
+		p.errorHandler = NewErrorHandler(p)
+	}
+}
+func (p *GormPlugin) CreateSQLBuilder(db *gorm.DB) SQLBuilderInterface {
+	return NewSQLBuilder(db, p)
+}
+func (p *GormPlugin) FormTableName(schema string, storageUnit string) string {
+	if schema == "" {
+		return storageUnit
+	}
+	return schema + "." + storageUnit
+}
+type GormPluginFunctions interface {
+	ParseConnectionConfig(config *engine.PluginConfig) (*ConnectionInput, error)
+	ConvertStringValue(value, columnType string, isNullable bool) (any, error)
+	ConvertRawToRows(raw *sql.Rows) (*engine.GetRowsResult, error)
+	ConvertRecordValuesToMap(values []engine.Record) (map[string]any, error)
+	FormatValue(val any) string
+	FormatTimeForExport(value time.Time) string
+	CreateSQLBuilder(db *gorm.DB) SQLBuilderInterface
+	DB(config *engine.PluginConfig) (*gorm.DB, error)
+	GetPlaceholder(index int) string
+	GetTableInfoQuery() string
+	GetStorageUnitExistsQuery() string
+	GetPrimaryKeyColQuery() string
+	GetAllSchemasQuery() string
+	GetCreateTableQuery(db *gorm.DB, schema string, storageUnit string, columns []engine.Record) string
+	FormTableName(schema string, storageUnit string) string
+	GetSupportedOperators() map[string]string
+	GetGraphQueryDB(db *gorm.DB, schema string) *gorm.DB
+	GetTableNameAndAttributes(rows *sql.Rows) (string, []engine.Record)
+	GetRowsOrderBy(db *gorm.DB, schema string, storageUnit string) string
+	GetColumnCodec(columnType string) ColumnCodec
+	GetCustomColumnTypeName(columnName string, defaultTypeName string) string
+	IsGeometryType(columnType string) bool
+	FormatGeometryValue(rawBytes []byte, columnType string) string
+	HandleCustomDataType(value string, columnType string, isNullable bool) (any, bool, error)
+	IsArrayType(columnType string) bool
+	ResolveGraphSchema(config *engine.PluginConfig, schema string) string
+	ShouldCheckRowsAffected() bool
+	GetPrimaryKeyColumns(db *gorm.DB, schema string, tableName string) ([]string, error)
+	GetForeignKeyRelationships(config *engine.PluginConfig, schema string, storageUnit string) (map[string]*engine.ForeignKeyRelationship, error)
+	GetDatabaseType() engine.DatabaseType
+	GetColumnConstraints(config *engine.PluginConfig, schema string, storageUnit string) (map[string]map[string]any, error)
+	NormalizeType(typeName string) string
+	GetColumnTypes(db *gorm.DB, schema, tableName string) (map[string]ColumnTypeInfo, error)
+	GetLastInsertID(db *gorm.DB) (int64, error)
+	GetMaxBulkInsertParameters() int
+	BuildSkipConflictClause(pkColumns []string) clause.OnConflict
+}
+func (p *GormPlugin) GetStorageUnits(config *engine.PluginConfig, schema string) ([]engine.StorageUnit, error) {
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) ([]engine.StorageUnit, error) {
+		var storageUnits []engine.StorageUnit
+		rows, err := db.Raw(p.GetTableInfoQuery(), schema).Rows()
+		if err != nil {
+			log.WithError(err).Error("Failed to execute table info query for schema: " + schema)
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			tableName, attributes := p.GetTableNameAndAttributes(rows)
+			if attributes == nil && tableName == "" {
+				continue
+			}
+			storageUnits = append(storageUnits, engine.StorageUnit{
+				Name:       tableName,
+				Attributes: attributes,
+			})
+		}
+		return storageUnits, nil
+	})
+}
+func (p *GormPlugin) StorageUnitExists(config *engine.PluginConfig, schema string, storageUnit string) (bool, error) {
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) (bool, error) {
+		var exists bool
+		err := db.Raw(p.GetStorageUnitExistsQuery(), schema, storageUnit).Scan(&exists).Error
+		if err != nil {
+			return false, err
+		}
+		return exists, nil
+	})
+}
+func (p *GormPlugin) GetAllSchemas(config *engine.PluginConfig) ([]string, error) {
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) ([]string, error) {
+		var schemas []any
+		query := p.GetAllSchemasQuery()
+		if err := db.Raw(query).Scan(&schemas).Error; err != nil {
+			return nil, p.errorHandler.HandleError(err, "GetAllSchemas", map[string]any{
+				"query": query,
+			})
+		}
+		schemaNames := make([]string, len(schemas))
+		for i, schema := range schemas {
+			switch v := schema.(type) {
+			case string:
+				schemaNames[i] = v
+			case []byte:
+				schemaNames[i] = string(v)
+			default:
+				schemaNames[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		return schemaNames, nil
+	})
+}
+func (p *GormPlugin) GetRows(config *engine.PluginConfig, req *engine.GetRowsRequest) (*engine.GetRowsResult, error) {
+	log.WithFields(map[string]any{
+		"databaseType": config.Credentials.Type,
+		"schema":       req.Schema,
+		"storageUnit":  req.StorageUnit,
+		"pageSize":     req.PageSize,
+		"pageOffset":   req.PageOffset,
+		"hasWhere":     req.Where != nil,
+		"sortCount":    len(req.Sort),
+	}).Debug("GORM row fetch requested")
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) (*engine.GetRowsResult, error) {
+		return p.getGenericRows(db, req.Schema, req.StorageUnit, req.Where, req.Sort, req.PageSize, req.PageOffset)
+	})
+}
+func (p *GormPlugin) GetRowCount(config *engine.PluginConfig, schema string, storageUnit string, where *queryast.WhereCondition) (int64, error) {
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) (int64, error) {
+		var columnTypes map[string]ColumnTypeInfo
+		if where != nil {
+			var err error
+			columnTypes, err = p.GormPluginFunctions.GetColumnTypes(db, schema, storageUnit)
+			if err != nil {
+				log.WithError(err).Warn(fmt.Sprintf("Failed to get column types for table %s.%s during row count; proceeding without type info", schema, storageUnit))
+			}
+		}
+		builder := p.GormPluginFunctions.CreateSQLBuilder(db)
+		fullTable := builder.BuildFullTableName(schema, storageUnit)
+		query := db.Table(fullTable)
+		query, err := p.ApplyWhereConditions(query, where, columnTypes)
+		if err != nil {
+			return 0, err
+		}
+		var count int64
+		if err := query.Count(&count).Error; err != nil {
+			return 0, err
+		}
+		return count, nil
+	})
+}
+func (p *GormPlugin) GetColumnsForTable(config *engine.PluginConfig, schema string, storageUnit string) ([]engine.Column, error) {
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) ([]engine.Column, error) {
+		migrator := NewMigratorHelper(db, p.GormPluginFunctions)
+		fullTableName := p.FormTableName(schema, storageUnit)
+		columns, err := migrator.GetOrderedColumns(fullTableName)
+		if err != nil {
+			log.WithError(err).Error(fmt.Sprintf("Failed to get columns for table %s.%s", schema, storageUnit))
+			return nil, err
+		}
+		fkRelationships, err := p.GormPluginFunctions.GetForeignKeyRelationships(config, schema, storageUnit)
+		if err != nil {
+			log.WithError(err).Warn(fmt.Sprintf("Failed to get foreign key relationships for table %s.%s", schema, storageUnit))
+			fkRelationships = make(map[string]*engine.ForeignKeyRelationship)
+		}
+		primaryKeys, err := p.GetPrimaryKeyColumns(db, schema, storageUnit)
+		if err != nil {
+			log.WithError(err).Warn(fmt.Sprintf("Failed to get primary keys for table %s.%s", schema, storageUnit))
+			primaryKeys = []string{}
+		}
+		log.Debugf("[FK DEBUG] GetColumns for %s.%s: fkCount=%d, pkCount=%d, pks=%v", schema, storageUnit, len(fkRelationships), len(primaryKeys), primaryKeys)
+		for i := range columns {
+			columns[i].IsPrimary = slices.Contains(primaryKeys, columns[i].Name)
+			if fk, exists := fkRelationships[columns[i].Name]; exists {
+				columns[i].IsForeignKey = true
+				columns[i].ReferencedTable = &fk.ReferencedTable
+				columns[i].ReferencedColumn = &fk.ReferencedColumn
+			}
+		}
+		return columns, nil
+	})
+}
+func (p *GormPlugin) getGenericRows(db *gorm.DB, schema, storageUnit string, where *queryast.WhereCondition, sort []*queryast.SortCondition, pageSize, pageOffset int) (*engine.GetRowsResult, error) {
+	var columnTypes map[string]ColumnTypeInfo
+	if where != nil {
+		var err error
+		columnTypes, err = p.GormPluginFunctions.GetColumnTypes(db, schema, storageUnit)
+		if err != nil {
+			log.WithError(err).Warn(fmt.Sprintf("Failed to get column types for table %s.%s during row retrieval; proceeding without type info", schema, storageUnit))
+		}
+	}
+	builder := p.GormPluginFunctions.CreateSQLBuilder(db)
+	fullTable := builder.BuildFullTableName(schema, storageUnit)
+	log.WithFields(map[string]any{
+		"dialect":     db.Dialector.Name(),
+		"schema":      schema,
+		"storageUnit": storageUnit,
+		"fullTable":   fullTable,
+		"pageSize":    pageSize,
+		"pageOffset":  pageOffset,
+		"hasWhere":    where != nil,
+		"sortCount":   len(sort),
+	}).Debug("GORM generic row fetch starting")
+	var totalCount int64
+	countDone := make(chan error, 1)
+	go func() {
+		countQuery := db.Table(fullTable)
+		var err error
+		countQuery, err = p.ApplyWhereConditions(countQuery, where, columnTypes)
+		if err != nil {
+			countDone <- err
+			return
+		}
+		countDone <- countQuery.Count(&totalCount).Error
+	}()
+	query := db.Table(fullTable)
+	query, err := p.ApplyWhereConditions(query, where, columnTypes)
+	if err != nil {
+		log.WithError(err).Error(fmt.Sprintf("Failed to apply where conditions for table %s.%s", schema, storageUnit))
+		return nil, err
+	}
+	if len(sort) > 0 {
+		sortList := make([]plugins.Sort, len(sort))
+		for i, s := range sort {
+			sortList[i] = plugins.Sort{
+				Column:    s.Column,
+				Direction: plugins.Down,
+			}
+			if s.Direction == queryast.SortDirectionAsc {
+				sortList[i].Direction = plugins.Up
+			}
+		}
+		query = builder.BuildOrderBy(query, sortList)
+	} else {
+		if orderBy := p.GormPluginFunctions.GetRowsOrderBy(db, schema, storageUnit); orderBy != "" {
+			query = query.Order(orderBy)
+		}
+	}
+	if pageSize > 0 {
+		query = query.Limit(pageSize).Offset(pageOffset)
+	}
+	rows, err := query.Rows()
+	if err != nil {
+		log.WithError(err).Error(fmt.Sprintf("Failed to execute generic rows query for table %s.%s", schema, storageUnit))
+		return nil, err
+	}
+	defer rows.Close()
+	result, err := p.GormPluginFunctions.ConvertRawToRows(rows)
+	if err != nil {
+		log.WithError(err).Error(fmt.Sprintf("Failed to convert raw rows for table %s.%s", schema, storageUnit))
+		return nil, err
+	}
+	log.WithFields(map[string]any{
+		"schema":      schema,
+		"storageUnit": storageUnit,
+		"rowCount":    len(result.Rows),
+		"columnCount": len(result.Columns),
+	}).Debug("GORM generic row fetch converted rows")
+	for i, col := range result.Columns {
+		if _, err := strconv.Atoi(col.Type); err == nil {
+			result.Columns[i].Type = p.FindMissingDataType(db, col.Type)
+		}
+	}
+	if countErr := <-countDone; countErr != nil {
+		log.WithError(countErr).Warn(fmt.Sprintf("Failed to get row count for table %s.%s", schema, storageUnit))
+	} else {
+		result.TotalCount = totalCount
+	}
+	log.WithFields(map[string]any{
+		"schema":      schema,
+		"storageUnit": storageUnit,
+		"rowCount":    len(result.Rows),
+		"columnCount": len(result.Columns),
+		"totalCount":  result.TotalCount,
+	}).Debug("GORM generic row fetch completed")
+	return result, nil
+}
+func (p *GormPlugin) ApplyWhereConditions(query *gorm.DB, condition *queryast.WhereCondition, columnTypes map[string]ColumnTypeInfo) (*gorm.DB, error) {
+	if condition == nil {
+		return query, nil
+	}
+	switch condition.Type {
+	case queryast.WhereConditionTypeAtomic:
+		return p.applyAtomicCondition(query, condition.Atomic, columnTypes)
+	case queryast.WhereConditionTypeAnd:
+		return p.applyAndConditions(query, condition.And, columnTypes)
+	case queryast.WhereConditionTypeOr:
+		return p.applyOrConditions(query, condition.Or, columnTypes)
+	}
+	return query, nil
+}
+func (p *GormPlugin) applyAtomicCondition(query *gorm.DB, atomic *queryast.AtomicWhereCondition, columnTypes map[string]ColumnTypeInfo) (*gorm.DB, error) {
+	if atomic == nil {
+		return query, nil
+	}
+	columnType := atomic.ColumnType
+	isNullable := false
+	if columnTypes != nil {
+		if colInfo, exists := columnTypes[atomic.Key]; exists && colInfo.Type != "" {
+			columnType = colInfo.Type
+			isNullable = colInfo.IsNullable
+		}
+	}
+	operator, ok := p.GetSupportedOperators()[atomic.Operator]
+	if !ok {
+		return nil, fmt.Errorf("invalid SQL operator: %s", atomic.Operator)
+	}
+	builder := p.GormPluginFunctions.CreateSQLBuilder(query.Session(&gorm.Session{NewDB: true}))
+	col := builder.QuoteIdentifier(atomic.Key)
+	switch operator {
+	case "IS NULL", "IS NOT NULL":
+		return query.Where(col + " " + operator), nil
+	case "IN", "NOT IN":
+		return p.applyInCondition(query, col, operator, atomic.Value, columnType, isNullable)
+	case "BETWEEN", "NOT BETWEEN":
+		return p.applyBetweenCondition(query, col, operator, atomic.Value, columnType, isNullable)
+	default:
+		return p.applySingleValueCondition(query, col, operator, atomic.Value, columnType, isNullable)
+	}
+}
+func (p *GormPlugin) applyInCondition(query *gorm.DB, col, operator, rawValue, columnType string, isNullable bool) (*gorm.DB, error) {
+	raw := strings.TrimSpace(rawValue)
+	if raw == "" {
+		return query.Where("1 = 0"), nil
+	}
+	parts := strings.Split(raw, ",")
+	vals := make([]any, 0, len(parts))
+	for _, part := range parts {
+		v := strings.TrimSpace(part)
+		cv, err := p.GormPluginFunctions.ConvertStringValue(v, columnType, isNullable)
+		if err != nil {
+			log.WithError(err).Error(fmt.Sprintf("Failed to convert IN value '%s' for column type '%s'", v, columnType))
+			return nil, err
+		}
+		vals = append(vals, cv)
+	}
+	return query.Where(col+" "+operator+" ?", vals), nil
+}
+func (p *GormPlugin) applyBetweenCondition(query *gorm.DB, col, operator, rawValue, columnType string, isNullable bool) (*gorm.DB, error) {
+	raw := strings.TrimSpace(rawValue)
+	parts := strings.Split(raw, ",")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid BETWEEN value; expected 'min,max'")
+	}
+	v1, err := p.GormPluginFunctions.ConvertStringValue(strings.TrimSpace(parts[0]), columnType, isNullable)
+	if err != nil {
+		log.WithError(err).Error("Failed to convert BETWEEN min value")
+		return nil, err
+	}
+	v2, err := p.GormPluginFunctions.ConvertStringValue(strings.TrimSpace(parts[1]), columnType, isNullable)
+	if err != nil {
+		log.WithError(err).Error("Failed to convert BETWEEN max value")
+		return nil, err
+	}
+	if operator == "BETWEEN" {
+		return query.Where(col+" BETWEEN ? AND ?", v1, v2), nil
+	}
+	return query.Where(col+" NOT BETWEEN ? AND ?", v1, v2), nil
+}
+func (p *GormPlugin) applySingleValueCondition(query *gorm.DB, col, operator, rawValue, columnType string, isNullable bool) (*gorm.DB, error) {
+	value, err := p.GormPluginFunctions.ConvertStringValue(rawValue, columnType, isNullable)
+	if err != nil {
+		log.WithError(err).Error(fmt.Sprintf("Failed to convert string value '%s' for column type '%s'", rawValue, columnType))
+		return nil, err
+	}
+	return query.Where(col+" "+operator+" ?", value), nil
+}
+func (p *GormPlugin) applyAndConditions(query *gorm.DB, and *queryast.OperationWhereCondition, columnTypes map[string]ColumnTypeInfo) (*gorm.DB, error) {
+	if and == nil {
+		return query, nil
+	}
+	for _, child := range and.Children {
+		var err error
+		query, err = p.ApplyWhereConditions(query, child, columnTypes)
+		if err != nil {
+			log.WithError(err).Error("Failed to apply AND where condition")
+			return nil, err
+		}
+	}
+	return query, nil
+}
+func (p *GormPlugin) applyOrConditions(query *gorm.DB, or *queryast.OperationWhereCondition, columnTypes map[string]ColumnTypeInfo) (*gorm.DB, error) {
+	if or == nil {
+		return query, nil
+	}
+	orQueries := query
+	for _, child := range or.Children {
+		childQuery, err := p.ApplyWhereConditions(query, child, columnTypes)
+		if err != nil {
+			log.WithError(err).Error("Failed to apply OR where condition")
+			return nil, err
+		}
+		orQueries = orQueries.Or(childQuery)
+	}
+	return orQueries, nil
+}
+func (p *GormPlugin) GetDatabaseType() engine.DatabaseType {
+	return p.Type
+}
+func (p *GormPlugin) WithTransaction(config *engine.PluginConfig, operation func(tx any) error) error {
+	_, err := plugins.WithConnection(config, p.DB, func(db *gorm.DB) (bool, error) {
+		tx := db.Begin()
+		if tx.Error != nil {
+			return false, fmt.Errorf("failed to begin transaction: %w", tx.Error)
+		}
+		if err := operation(tx); err != nil {
+			tx.Rollback()
+			return false, err
+		}
+		if err := tx.Commit().Error; err != nil {
+			return false, fmt.Errorf("failed to commit transaction: %w", err)
+		}
+		return true, nil
+	})
+	return err
+}
+func (p *GormPlugin) ExecuteRawSQL(config *engine.PluginConfig, openMultiStatementDB func(*engine.PluginConfig) (*gorm.DB, error), query string, params ...any) (*engine.GetRowsResult, error) {
+	multiStatement := config != nil && config.MultiStatement
+	dbFunc := p.DB
+	if multiStatement && openMultiStatementDB != nil {
+		dbFunc = openMultiStatementDB
+	}
+	return plugins.WithConnection(config, dbFunc, func(db *gorm.DB) (*engine.GetRowsResult, error) {
+		if multiStatement {
+			sqlDB, err := db.DB()
+			if err != nil {
+				return nil, err
+			}
+			_, err = sqlDB.ExecContext(config.OperationContext(), query)
+			if err != nil {
+				return nil, err
+			}
+			return &engine.GetRowsResult{
+				Columns: []engine.Column{},
+				Rows:    [][]string{},
+			}, nil
+		}
+		rows, err := db.Raw(query, params...).Rows()
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return p.ConvertRawToRows(rows)
+	})
+}
+func (p *GormPlugin) GetForeignKeyRelationships(config *engine.PluginConfig, schema string, storageUnit string) (map[string]*engine.ForeignKeyRelationship, error) {
+	return make(map[string]*engine.ForeignKeyRelationship), nil
+}
+func (p *GormPlugin) QueryForeignKeyRelationships(config *engine.PluginConfig, query string, params ...any) (map[string]*engine.ForeignKeyRelationship, error) {
+	log.Debugf("[FK DEBUG] QueryForeignKeyRelationships called with params: %v", params)
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) (map[string]*engine.ForeignKeyRelationship, error) {
+		rows, err := db.Raw(query, params...).Rows()
+		if err != nil {
+			log.Debugf("[FK DEBUG] ERROR: Raw query error: %v", err)
+			return nil, err
+		}
+		defer rows.Close()
+		relationships := make(map[string]*engine.ForeignKeyRelationship)
+		for rows.Next() {
+			var columnName, referencedTable, referencedColumn string
+			if err := rows.Scan(&columnName, &referencedTable, &referencedColumn); err != nil {
+				log.WithError(err).Error("Failed to scan foreign key relationship")
+				continue
+			}
+			relationships[columnName] = &engine.ForeignKeyRelationship{
+				ColumnName:       columnName,
+				ReferencedTable:  referencedTable,
+				ReferencedColumn: referencedColumn,
+			}
+		}
+		log.Debugf("[FK DEBUG] Found %d FK relationships for params %v", len(relationships), params)
+		return relationships, nil
+	})
+}
+func (p *GormPlugin) QueryComputedColumns(config *engine.PluginConfig, query string, params ...any) (map[string]bool, error) {
+	return plugins.WithConnection(config, p.DB, func(db *gorm.DB) (map[string]bool, error) {
+		rows, err := db.Raw(query, params...).Rows()
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		computed := make(map[string]bool)
+		for rows.Next() {
+			var columnName string
+			if err := rows.Scan(&columnName); err != nil {
+				continue
+			}
+			computed[columnName] = true
+		}
+		return computed, nil
+	})
+}
+func (p *GormPlugin) NormalizeType(typeName string) string {
+	spec := common.ParseTypeSpec(typeName)
+	return common.FormatTypeSpec(spec)
+}
+func (p *GormPlugin) GetMaxBulkInsertParameters() int {
+	return 65535
+}
+func (p *GormPlugin) BuildSkipConflictClause(pkColumns []string) clause.OnConflict {
+	conflictCols := make([]clause.Column, len(pkColumns))
+	for i, col := range pkColumns {
+		conflictCols[i] = clause.Column{Name: col}
+	}
+	return clause.OnConflict{
+		Columns:   conflictCols,
+		DoNothing: true,
+	}
+}
+func (p *GormPlugin) MarkGeneratedColumns(config *engine.PluginConfig, schema string, storageUnit string, columns []engine.Column) error {
+	return nil
+}

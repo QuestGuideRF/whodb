@@ -1,0 +1,17 @@
+query GetStorageUnits($parent: SourceObjectRefInput) {
+  StorageUnit: SourceObjects(parent: $parent) {
+    Ref {
+      Kind
+      Locator
+      Path
+    }
+    Kind
+    Name
+    Attributes: Metadata {
+      Key
+      Value
+    }
+    Actions
+    HasChildren
+  }
+}

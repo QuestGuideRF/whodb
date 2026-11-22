@@ -1,0 +1,3 @@
+query SourceFieldOptions($sourceType: String!, $values: [RecordInput!]) {
+    SourceFieldOptions(sourceType: $sourceType, fieldKey: "Database", values: $values)
+}

@@ -1,0 +1,20 @@
+query GetColumnsBatch($refs: [SourceObjectRefInput!]!) {
+    ColumnsBatch: SourceColumnsBatch(refs: $refs) {
+        StorageUnit: Ref {
+            Kind
+            Locator
+            Path
+        }
+        Columns {
+            Name
+            Type
+            IsPrimary
+            IsForeignKey
+            ReferencedTable
+            ReferencedColumn
+            Length
+            Precision
+            Scale
+        }
+    }
+}

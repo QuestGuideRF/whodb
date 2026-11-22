@@ -1,0 +1,97 @@
+package tui
+import (
+	"strings"
+	"testing"
+	"github.com/charmbracelet/bubbles/key"
+)
+func TestRenderBindingHelp_Empty(t *testing.T) {
+	result := RenderBindingHelp()
+	if result != "" {
+		t.Errorf("Expected empty string for no bindings, got %q", result)
+	}
+}
+func TestRenderBindingHelp_SingleBinding(t *testing.T) {
+	b := key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm"))
+	result := RenderBindingHelp(b)
+	if !strings.Contains(result, "enter") {
+		t.Errorf("Expected result to contain 'enter', got %q", result)
+	}
+	if !strings.Contains(result, "confirm") {
+		t.Errorf("Expected result to contain 'confirm', got %q", result)
+	}
+}
+func TestRenderBindingHelp_MultipleBindings(t *testing.T) {
+	b1 := key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm"))
+	b2 := key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
+	result := RenderBindingHelp(b1, b2)
+	if !strings.Contains(result, "enter") {
+		t.Errorf("Expected result to contain 'enter', got %q", result)
+	}
+	if !strings.Contains(result, "cancel") {
+		t.Errorf("Expected result to contain 'cancel', got %q", result)
+	}
+}
+func TestRenderBindingHelpWidth_AppendsGlobalHelp(t *testing.T) {
+	b := key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm"))
+	result := RenderBindingHelpWidth(80, b)
+	if !strings.Contains(result, Keys.Global.Help.Help().Key) {
+		t.Fatalf("expected width-aware footer help to include %q, got %q", Keys.Global.Help.Help().Key, result)
+	}
+}
+func TestRenderBindingHelpWidthNoHelp_DoesNotAppendGlobalHelp(t *testing.T) {
+	b := key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm"))
+	result := renderBindingHelpWidthNoHelp(80, b)
+	if strings.Contains(result, Keys.Global.Help.Help().Key) {
+		t.Fatalf("did not expect no-help footer renderer to include %q, got %q", Keys.Global.Help.Help().Key, result)
+	}
+}
+func TestKeys_GlobalBindings(t *testing.T) {
+	h := Keys.Global.Quit.Help()
+	if h.Key == "" {
+		t.Error("Expected Global.Quit to have a help key")
+	}
+	if h.Desc == "" {
+		t.Error("Expected Global.Quit to have a help description")
+	}
+	h = Keys.Global.Back.Help()
+	if h.Key == "" {
+		t.Error("Expected Global.Back to have a help key")
+	}
+	h = Keys.Global.NextView.Help()
+	if h.Key == "" {
+		t.Error("Expected Global.NextView to have a help key")
+	}
+}
+func TestKeys_BrowserBindings(t *testing.T) {
+	h := Keys.Browser.Up.Help()
+	if h.Key == "" {
+		t.Error("Expected Browser.Up to have a help key")
+	}
+	h = Keys.Browser.Select.Help()
+	if h.Key == "" {
+		t.Error("Expected Browser.Select to have a help key")
+	}
+	h = Keys.Browser.Filter.Help()
+	if h.Key == "" {
+		t.Error("Expected Browser.Filter to have a help key")
+	}
+}
+func TestKeys_EditorBindings(t *testing.T) {
+	h := Keys.Editor.Execute.Help()
+	if h.Key == "" {
+		t.Error("Expected Editor.Execute to have a help key")
+	}
+	if h.Desc == "" {
+		t.Error("Expected Editor.Execute to have a help description")
+	}
+}
+func TestKeys_ResultsBindings(t *testing.T) {
+	h := Keys.Results.NextPage.Help()
+	if h.Key == "" {
+		t.Error("Expected Results.NextPage to have a help key")
+	}
+	h = Keys.Results.Where.Help()
+	if h.Key == "" {
+		t.Error("Expected Results.Where to have a help key")
+	}
+}

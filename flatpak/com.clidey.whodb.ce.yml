@@ -1,0 +1,41 @@
+id: com.clidey.whodb.ce
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+command: whodb
+finish-args:
+  - --filesystem=host
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --share=ipc
+modules:
+  - name: whodb
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 whodb /app/bin/whodb
+      - install -Dm644 whodb.desktop /app/share/applications/com.clidey.whodb.ce.desktop
+      - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/com.clidey.whodb.ce.png
+    sources:
+      - type: file
+        path: ../desktop-ce/build/linux/amd64/whodb
+        dest-filename: whodb
+        only-arches:
+          - x86_64
+      - type: file
+        path: ../desktop-ce/build/linux/arm64/whodb
+        dest-filename: whodb
+        only-arches:
+          - aarch64
+      - type: file
+        path: ../.github/linux/whodb.desktop
+      - type: file
+        path: ../.github/linux/icon.png
+x-checker-data:
+  type: json
+  url: https://api.github.com/repos/clidey/whodb/releases/latest
+  version-query: .tag_name | sub("^v"; "")
+  url-query: .assets[] | select(.name=="whodb-linux-amd64") | .browser_download_url

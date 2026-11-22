@@ -1,0 +1,14 @@
+Code Cleaner - Error Report
+Timestamp: 2026-04-29 21:41:45
+Project: C:\Users\Slava\Downloads\whodb
+Total errors: 2
+
+1. File: C:\Users\Slava\Downloads\whodb\frontend\src\components\ai.tsx
+   Error: Синтаксическая ошибка: TS/TSX parse error near line 409, column 5
+   Line: 409
+   Code:     return <div className="flex flex-col gap-4" data-testid="ai-provider">
+
+2. File: C:\Users\Slava\Downloads\whodb\frontend\src\components\icons.tsx
+   Error: Синтаксическая ошибка: TS/TSX parse error near line 1, column 1
+   Line: 1
+   Code: const ceLogos = {

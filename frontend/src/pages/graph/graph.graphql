@@ -1,0 +1,23 @@
+query GetGraph($ref: SourceObjectRefInput) {
+  Graph: SourceGraph(ref: $ref) {
+    Unit {
+      Ref {
+        Kind
+        Locator
+        Path
+      }
+      Kind
+      Name
+      Attributes: Metadata {
+        Key
+        Value
+      }
+    }
+    Relations {
+      Name
+      Relationship
+      SourceColumn
+      TargetColumn
+    }
+  }
+}

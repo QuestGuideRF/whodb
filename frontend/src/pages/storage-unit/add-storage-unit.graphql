@@ -1,0 +1,5 @@
+mutation AddStorageUnit($parent: SourceObjectRefInput, $storageUnit: String!, $fields: [RecordInput!]!) {
+    AddStorageUnit: CreateSourceObject(parent: $parent, name: $storageUnit, fields: $fields) {
+        Status
+    }
+}

@@ -1,0 +1,5 @@
+mutation LoginSource($credentials: SourceLoginInput!) {
+  LoginSource(credentials: $credentials) {
+    Status
+  }
+}

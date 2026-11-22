@@ -1,0 +1,470 @@
+import { skipToken, useMutation, useQuery } from "@apollo/client/react";
+import { FC, useCallback, useEffect, useMemo, useState } from "react";
+import {
+    Badge,
+    Button,
+    cn,
+    Dialog,
+    DialogContent,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+    Input,
+    Label,
+    Separator,
+    Switch,
+    toast,
+} from "@clidey/ux";
+import { SearchSelect } from "../ux";
+import {
+    AddAwsProviderDocument,
+    AwsProvider,
+    AwsProviderInput,
+    CloudProviderStatus,
+    GetAwsRegionsDocument,
+    GetDiscoveredConnectionsDocument,
+    GetLocalAwsProfilesDocument,
+    TestAwsCredentialsDocument,
+    TestCloudProviderDocument,
+    UpdateAwsProviderDocument,
+    LocalAwsProfile,
+} from "@graphql";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { ProvidersActions, LocalCloudProvider } from "../../store/providers";
+import { useTranslation } from "@/hooks/use-translation";
+import { ChevronDownIcon, CloudIcon } from "../heroicons";
+import { upsertCloudProviderCache } from "../../utils/apollo-provider-cache";
+
+export interface AwsProviderModalProps {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+}
+
+export const AwsProviderModal: FC<AwsProviderModalProps> = ({
+    open,
+    onOpenChange,
+}) => {
+    const { t } = useTranslation('components/aws-provider-modal');
+    const dispatch = useAppDispatch();
+
+    const editingProviderId = useAppSelector(state => state.providers.editingProviderId);
+    const cloudProviders = useAppSelector(state => state.providers.cloudProviders);
+    const editingProvider = useMemo(() => {
+        if (!editingProviderId) return null;
+        const found = cloudProviders.find(p => p.Id === editingProviderId);
+        if (!found || found.__typename !== 'AWSProvider') return null;
+        return found as AwsProvider;
+    }, [editingProviderId, cloudProviders]);
+
+    const isEditMode = editingProviderId !== null;
+    const localProfilesQueryOptions = isEditMode ? skipToken : {};
+
+    const { data: localProfilesData, loading: profilesLoading } = useQuery(GetLocalAwsProfilesDocument, localProfilesQueryOptions);
+    const localProfiles = localProfilesData?.LocalAWSProfiles ?? [];
+
+    const { data: regionsData } = useQuery(GetAwsRegionsDocument);
+    const awsRegions = regionsData?.AWSRegions ?? [];
+
+    const [name, setName] = useState("");
+    const [region, setRegion] = useState("us-east-1");
+    const [customRegion, setCustomRegion] = useState("");
+    const [profileName, setProfileName] = useState("");
+    const [discoverRDS, setDiscoverRDS] = useState(true);
+    const [discoverElastiCache, setDiscoverElastiCache] = useState(true);
+    const [discoverDocumentDB, setDiscoverDocumentDB] = useState(true);
+
+    const [addProvider, { loading: addLoading }] = useMutation(AddAwsProviderDocument, {
+        refetchQueries: [GetDiscoveredConnectionsDocument],
+        update(cache, { data }) {
+            if (data?.AddAWSProvider) {
+                upsertCloudProviderCache(cache, data.AddAWSProvider);
+            }
+        },
+    });
+    const [updateProvider, { loading: updateLoading }] = useMutation(UpdateAwsProviderDocument, {
+        refetchQueries: [GetDiscoveredConnectionsDocument],
+        update(cache, { data }) {
+            if (data?.UpdateAWSProvider) {
+                upsertCloudProviderCache(cache, data.UpdateAWSProvider);
+            }
+        },
+    });
+    const [testProvider, { loading: testLoading }] = useMutation(TestCloudProviderDocument);
+    const [testCredentials, { loading: testCredentialsLoading }] = useMutation(TestAwsCredentialsDocument);
+
+    const loading = addLoading || updateLoading || testLoading || testCredentialsLoading;
+
+    useEffect(() => {
+        if (open) {
+            if (editingProvider) {
+                setName(editingProvider.Name);
+
+                const isCustomRegion = !awsRegions.some(r => r.Id === editingProvider.Region);
+                if (isCustomRegion) {
+                    setRegion("custom");
+                    setCustomRegion(editingProvider.Region);
+                } else {
+                    setRegion(editingProvider.Region);
+                    setCustomRegion("");
+                }
+                setProfileName(editingProvider.ProfileName ?? "");
+                setDiscoverRDS(editingProvider.DiscoverRDS);
+                setDiscoverElastiCache(editingProvider.DiscoverElastiCache);
+                setDiscoverDocumentDB(editingProvider.DiscoverDocumentDB);
+            } else {
+
+                setName("");
+                setRegion("us-east-1");
+                setCustomRegion("");
+                setProfileName("");
+                setDiscoverRDS(true);
+                setDiscoverElastiCache(true);
+                setDiscoverDocumentDB(true);
+            }
+        }
+    }, [open, editingProvider]);
+
+    const handleClose = useCallback(() => {
+        onOpenChange(false);
+        dispatch(ProvidersActions.closeProviderModal());
+    }, [onOpenChange, dispatch]);
+
+    const handleSelectLocalProfile = useCallback((profile: LocalAwsProfile) => {
+
+        const displayName = profile.IsDefault
+            ? t('defaultAwsName')
+            : t('awsProfileName', { name: profile.Name });
+        setName(displayName);
+
+        if (profile.Region) {
+            const isKnownRegion = awsRegions.some(r => r.Id === profile.Region);
+            if (isKnownRegion) {
+                setRegion(profile.Region);
+                setCustomRegion("");
+            } else {
+                setRegion("custom");
+                setCustomRegion(profile.Region);
+            }
+        }
+
+        if (profile.Source === "environment") {
+            setProfileName("");
+        } else {
+            setProfileName(profile.Name);
+        }
+    }, [t, awsRegions]);
+
+    const getEffectiveRegion = useCallback(() => {
+        return region === "custom" ? customRegion : region;
+    }, [region, customRegion]);
+
+    const buildInput = useCallback((): AwsProviderInput => {
+        const input: AwsProviderInput = {
+            Name: name,
+            Region: getEffectiveRegion(),
+            DiscoverRDS: discoverRDS,
+            DiscoverElastiCache: discoverElastiCache,
+            DiscoverDocumentDB: discoverDocumentDB,
+        };
+
+        if (profileName) {
+            input.ProfileName = profileName;
+        }
+
+        return input;
+    }, [name, getEffectiveRegion, profileName, discoverRDS, discoverElastiCache, discoverDocumentDB]);
+
+    const handleSubmit = useCallback(async () => {
+        if (!name.trim()) {
+            toast.error(t('nameRequired'));
+            return;
+        }
+
+        const effectiveRegion = getEffectiveRegion();
+        if (!effectiveRegion.trim()) {
+            toast.error(t('regionRequired'));
+            return;
+        }
+
+        const input = buildInput();
+
+        try {
+            if (isEditMode && editingProviderId) {
+                const { data } = await updateProvider({
+                    variables: { id: editingProviderId, input },
+                });
+                if (data?.UpdateAWSProvider) {
+                    dispatch(ProvidersActions.updateCloudProvider(data.UpdateAWSProvider as LocalCloudProvider));
+                    toast.success(t('providerUpdated'));
+                    handleClose();
+                }
+            } else {
+                const { data } = await addProvider({
+                    variables: { input },
+                });
+                if (data?.AddAWSProvider) {
+                    dispatch(ProvidersActions.addCloudProvider(data.AddAWSProvider as LocalCloudProvider));
+                    toast.success(t('providerAdded'));
+                    handleClose();
+                }
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : t('unknownError');
+            toast.error(t('operationFailed', { error: errorMessage }));
+        }
+    }, [name, getEffectiveRegion, buildInput, isEditMode, editingProviderId, updateProvider, addProvider, dispatch, handleClose, t]);
+
+    const handleTest = useCallback(async () => {
+        const effectiveRegion = getEffectiveRegion();
+        if (!name.trim() || !effectiveRegion.trim()) {
+            toast.error(t('nameRequired'));
+            return;
+        }
+
+        try {
+            if (isEditMode && editingProviderId) {
+
+                const { data } = await testProvider({
+                    variables: { id: editingProviderId },
+                });
+                if (data?.TestCloudProvider === CloudProviderStatus.Connected) {
+                    dispatch(ProvidersActions.setProviderStatus({
+                        id: editingProviderId,
+                        status: CloudProviderStatus.Connected,
+                    }));
+                    toast.success(t('connectionSuccessful'));
+                } else {
+                    dispatch(ProvidersActions.setProviderStatus({
+                        id: editingProviderId,
+                        status: CloudProviderStatus.Error,
+                    }));
+                    toast.error(t('connectionFailed'));
+                }
+            } else {
+
+                const input = buildInput();
+                const { data } = await testCredentials({
+                    variables: { input },
+                });
+                if (data?.TestAWSCredentials === CloudProviderStatus.Connected) {
+                    toast.success(t('connectionSuccessful'));
+                } else {
+                    toast.error(t('connectionFailed'));
+                }
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : t('unknownError');
+            toast.error(t('testFailed', { error: errorMessage }));
+        }
+    }, [name, getEffectiveRegion, isEditMode, editingProviderId, testProvider, testCredentials, buildInput, dispatch, t]);
+
+    const regionOptions = useMemo(() => {
+        const partitionLabels: Record<string, string> = {
+            "aws": "",
+            "aws-us-gov": "GovCloud",
+            "aws-cn": "China",
+        };
+        const grouped: { value: string; label: string }[] = [];
+        let lastPartition = "";
+        for (const r of awsRegions) {
+            const partition = r.Partition ?? "aws";
+            if (partition !== lastPartition && partitionLabels[partition]) {
+                grouped.push({ value: `__header_${partition}`, label: `── ${partitionLabels[partition]} ──` });
+            }
+            lastPartition = partition;
+            grouped.push({ value: r.Id, label: `${r.Id} - ${r.Description}` });
+        }
+        grouped.push({ value: "custom", label: t('customRegion') });
+        return grouped;
+    }, [awsRegions, t]);
+
+    return (
+        <Dialog open={open} onOpenChange={handleClose}>
+            <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="aws-provider-modal">
+                <DialogHeader>
+                    <DialogTitle>
+                        {isEditMode ? t('editProvider') : t('addAwsAccount')}
+                    </DialogTitle>
+                </DialogHeader>
+
+                <div className="flex flex-col gap-4 py-4">
+                    { }
+                    {!isEditMode && localProfiles.length > 0 && (
+                        <div className="flex flex-col gap-3">
+                            <div className="flex items-center gap-2">
+                                <CloudIcon className="w-4 h-4 text-muted-foreground" />
+                                <Label className="text-sm font-medium">{t('detectedProfiles')}</Label>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {localProfiles.map((profile) => {
+
+                                    const sourceKey = {
+                                        credentials: 'sourceCredentials',
+                                        config: 'sourceConfig',
+                                        environment: 'sourceEnvironment',
+                                    }[profile.Source];
+                                    const sourceDisplay = sourceKey ? t(sourceKey) : profile.Source;
+
+                                    const authTypeKey = {
+                                        sso: 'authTypeSso',
+                                        'assume-role': 'authTypeAssumeRole',
+                                        static: 'authTypeStatic',
+                                        environment: 'envDefined',
+                                    }[profile.AuthType ?? 'static'];
+                                    const authTypeDisplay = authTypeKey ? t(authTypeKey) : undefined;
+
+                                    return (
+                                        <button
+                                            key={`${profile.Source}-${profile.Name}`}
+                                            type="button"
+                                            onClick={() => handleSelectLocalProfile(profile)}
+                                            className={cn(
+                                                "flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors",
+                                                "hover:border-brand hover:bg-brand/5",
+                                                "focus:outline-none focus:ring-2 focus:ring-brand focus:ring-offset-2"
+                                            )}
+                                            title={t('foundInSource', { source: sourceDisplay })}
+                                        >
+                                            <span className="font-medium">
+                                                {profile.IsDefault ? t('defaultProfileName') : profile.Name}
+                                            </span>
+                                            {profile.Region && (
+                                                <Badge variant="outline" className="text-xs">
+                                                    {profile.Region}
+                                                </Badge>
+                                            )}
+                                            <Badge variant="secondary" className="text-xs font-normal">
+                                                {sourceDisplay}
+                                            </Badge>
+                                            {authTypeDisplay && profile.AuthType !== 'static' && profile.AuthType !== 'environment' && (
+                                                <Badge variant="outline" className="text-xs font-normal">
+                                                    {authTypeDisplay}
+                                                </Badge>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                {t('clickToAutofill')}
+                            </p>
+                            <Separator />
+                        </div>
+                    )}
+
+                    {/* Name */}
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="provider-name">{t('displayName')}</Label>
+                        <Input
+                            id="provider-name"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder={t('namePlaceholder')}
+                            data-testid="provider-name"
+                        />
+                    </div>
+
+                    {/* Region */}
+                    <div className="flex flex-col gap-2">
+                        <Label>{t('awsRegion')}</Label>
+                        <SearchSelect
+                            value={region}
+                            onChange={setRegion}
+                            options={regionOptions}
+                            placeholder={t('selectRegion')}
+                            contentClassName="w-[var(--radix-popover-trigger-width)]"
+                            rightIcon={<ChevronDownIcon className="w-4 h-4" />}
+                        />
+                        {region === "custom" && (
+                            <Input
+                                value={customRegion}
+                                onChange={(e) => setCustomRegion(e.target.value)}
+                                placeholder={t('customRegionPlaceholder')}
+                                data-testid="custom-region"
+                                className="mt-2"
+                            />
+                        )}
+                    </div>
+
+                    {/* Profile name */}
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="profile-name">{t('profileName')}</Label>
+                        <Input
+                            id="profile-name"
+                            value={profileName}
+                            onChange={(e) => setProfileName(e.target.value)}
+                            placeholder={t('profilePlaceholder')}
+                            data-testid="profile-name"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            {t('profileDesc')}
+                        </p>
+                    </div>
+
+                    { }
+                    <div className="flex flex-col gap-3 pt-4 border-t">
+                        <Label className="font-medium">{t('resourceDiscovery')}</Label>
+                        <div className="flex items-center justify-between">
+                            <div className="flex flex-col gap-0.5">
+                                <span className="text-sm">{t('rdsLabel')}</span>
+                                <span className="text-xs text-muted-foreground">{t('rdsDesc')}</span>
+                            </div>
+                            <Switch
+                                checked={discoverRDS}
+                                onCheckedChange={setDiscoverRDS}
+                                data-testid="discover-rds"
+                            />
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <div className="flex flex-col gap-0.5">
+                                <span className="text-sm">{t('elasticacheLabel')}</span>
+                                <span className="text-xs text-muted-foreground">{t('elasticacheDesc')}</span>
+                            </div>
+                            <Switch
+                                checked={discoverElastiCache}
+                                onCheckedChange={setDiscoverElastiCache}
+                                data-testid="discover-elasticache"
+                            />
+                        </div>
+                        <div className="flex items-center justify-between">
+                            <div className="flex flex-col gap-0.5">
+                                <span className="text-sm">{t('documentdbLabel')}</span>
+                                <span className="text-xs text-muted-foreground">{t('documentdbDesc')}</span>
+                            </div>
+                            <Switch
+                                checked={discoverDocumentDB}
+                                onCheckedChange={setDiscoverDocumentDB}
+                                data-testid="discover-documentdb"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <DialogFooter className="flex gap-2">
+                    <Button
+                        variant="outline"
+                        onClick={handleTest}
+                        disabled={loading}
+                        data-testid="test-connection"
+                    >
+                        {(testLoading || testCredentialsLoading) ? t('testing') : t('testConnection')}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        onClick={handleClose}
+                        disabled={loading}
+                    >
+                        {t('cancel')}
+                    </Button>
+                    <Button
+                        onClick={handleSubmit}
+                        disabled={loading}
+                        data-testid="submit-provider"
+                    >
+                        {(addLoading || updateLoading) ? t('saving') : (isEditMode ? t('save') : t('add'))}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+};

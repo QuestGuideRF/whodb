@@ -1,0 +1,620 @@
+package tui
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/clidey/whodb/cli/pkg/styles"
+	"github.com/clidey/whodb/core/src/querysuggestions"
+)
+type queryBuffer struct {
+	name string
+	text string
+}
+type EditorView struct {
+	parent              *MainModel
+	textarea            textarea.Model
+	err                 error
+	allSuggestions      []suggestion
+	filteredSuggestions []suggestion
+	showSuggestions     bool
+	selectedSuggestion  int
+	cursorPos           int
+	lastText            string
+	ghostPrefix         string
+	ghostSuggestion     string
+	width               int
+	height              int
+	lastWidth           int
+	lastHeight          int
+	suggestionHeight    int
+	queryState  OperationState
+	queryCancel context.CancelFunc
+	retryPrompt RetryPrompt
+	autocompleteSeqID int
+	compact           bool
+	buffers   []queryBuffer
+	activeTab int
+}
+func NewEditorView(parent *MainModel) *EditorView {
+	ta := textarea.New()
+	ta.Placeholder = "Enter SQL query..."
+	ta.Focus()
+	ta.SetHeight(10)
+	ta.SetWidth(80)
+	ta.CharLimit = 0
+	return &EditorView{
+		parent:              parent,
+		textarea:            ta,
+		allSuggestions:      []suggestion{},
+		filteredSuggestions: []suggestion{},
+		selectedSuggestion:  0,
+		buffers:             []queryBuffer{{name: "Query 1", text: ""}},
+		activeTab:           0,
+	}
+}
+func (v *EditorView) Update(msg tea.Msg) (*EditorView, tea.Cmd) {
+	var cmd tea.Cmd
+	switch msg := msg.(type) {
+	case QueryExecutedMsg:
+		v.queryState = OperationIdle
+		v.queryCancel = nil
+		if msg.Err != nil {
+			v.err = msg.Err
+			conn := v.parent.dbManager.GetCurrentConnection()
+			dbName := ""
+			if conn != nil {
+				dbName = conn.Database
+			}
+			v.parent.histMgr.Add(msg.Query, false, dbName)
+			v.resetGhostText()
+			return v, nil
+		}
+		conn := v.parent.dbManager.GetCurrentConnection()
+		dbName := ""
+		if conn != nil {
+			dbName = conn.Database
+		}
+		v.parent.histMgr.Add(msg.Query, true, dbName)
+		v.resetGhostText()
+		v.parent.resultsView.SetResults(msg.Result, msg.Query)
+		v.parent.PushView(ViewResults)
+		v.err = nil
+		rowCount := 0
+		if msg.Result != nil {
+			rowCount = len(msg.Result.Rows)
+		}
+		return v, v.parent.SetStatus(fmt.Sprintf("Query executed (%d rows)", rowCount))
+	case QueryTimeoutMsg:
+		v.queryState = OperationIdle
+		v.queryCancel = nil
+		preferred := v.parent.config.GetPreferredTimeout()
+		if preferred > 0 && !v.retryPrompt.AutoRetried() {
+			v.retryPrompt.SetAutoRetried(true)
+			return v, v.executeQueryWithTimeout(msg.Query, time.Duration(preferred)*time.Second)
+		}
+		v.err = fmt.Errorf("query timed out after %s", msg.Timeout)
+		v.retryPrompt.Show(msg.Query)
+		return v, nil
+	case QueryCancelledMsg:
+		v.queryState = OperationIdle
+		v.queryCancel = nil
+		return v, nil
+	case AutocompleteDebounceMsg:
+		if msg.SeqID == v.autocompleteSeqID {
+			v.updateAutocomplete(msg.Text, msg.Pos)
+		}
+		return v, nil
+	case externalEditorResultMsg:
+		if msg.err != nil {
+			v.err = msg.err
+		} else {
+			v.textarea.SetValue(strings.TrimRight(msg.content, "\n"))
+			v.showSuggestions = false
+			v.err = nil
+			v.resetGhostText()
+		}
+		v.refreshLayout()
+		return v, nil
+	case tea.WindowSizeMsg:
+		v.applyWindowSize(msg.Width, msg.Height)
+		return v, nil
+	case tea.MouseMsg:
+		if v.showSuggestions && len(v.filteredSuggestions) > 0 {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				v.selectedSuggestion--
+				if v.selectedSuggestion < 0 {
+					v.selectedSuggestion = len(v.filteredSuggestions) - 1
+				}
+				return v, nil
+			case tea.MouseButtonWheelDown:
+				v.selectedSuggestion = (v.selectedSuggestion + 1) % len(v.filteredSuggestions)
+				return v, nil
+			}
+		}
+	case tea.KeyMsg:
+		if v.retryPrompt.IsActive() {
+			result, handled := v.retryPrompt.HandleKeyMsg(msg.String())
+			if handled {
+				if result != nil {
+					v.err = nil
+					if result.Save {
+						v.parent.config.SetPreferredTimeout(int(result.Timeout.Seconds()))
+						return v, tea.Batch(v.parent.requestConfigSave(), v.executeQueryWithTimeout(v.retryPrompt.TimedOutQuery(), result.Timeout))
+					}
+					return v, v.executeQueryWithTimeout(v.retryPrompt.TimedOutQuery(), result.Timeout)
+				}
+				return v, nil
+			}
+		}
+		if msg.Type == tea.KeyEnter && msg.Alt {
+			return v, v.executeQuery()
+		}
+		if msg.String() == "ctrl+x" {
+			query := v.textarea.Value()
+			if query != "" {
+				v.parent.explainView.query = query
+				v.parent.PushView(ViewExplain)
+				return v, v.runExplain(query)
+			}
+			return v, nil
+		}
+		if msg.Type == tea.KeyCtrlAt {
+			v.triggerAutocomplete()
+			return v, nil
+		}
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 0 {
+			v.triggerAutocomplete()
+			return v, nil
+		}
+		if key.Matches(msg, Keys.Editor.Clear) {
+			v.textarea.Reset()
+			v.err = nil
+			v.showSuggestions = false
+			v.allSuggestions = []suggestion{}
+			v.filteredSuggestions = []suggestion{}
+			v.selectedSuggestion = 0
+			v.cursorPos = 0
+			v.lastText = ""
+			v.resetGhostText()
+			v.refreshLayout()
+			return v, nil
+		}
+		if v.showSuggestions && len(v.filteredSuggestions) > 0 {
+			switch msg.Type {
+			case tea.KeyTab:
+				v.selectedSuggestion = (v.selectedSuggestion + 1) % len(v.filteredSuggestions)
+				return v, nil
+			case tea.KeyShiftTab:
+				v.selectedSuggestion--
+				if v.selectedSuggestion < 0 {
+					v.selectedSuggestion = len(v.filteredSuggestions) - 1
+				}
+				return v, nil
+			case tea.KeyDown, tea.KeyCtrlN:
+				v.selectedSuggestion = (v.selectedSuggestion + 1) % len(v.filteredSuggestions)
+				return v, nil
+			case tea.KeyUp, tea.KeyCtrlP:
+				v.selectedSuggestion--
+				if v.selectedSuggestion < 0 {
+					v.selectedSuggestion = len(v.filteredSuggestions) - 1
+				}
+				return v, nil
+			case tea.KeyEnter:
+				if !msg.Alt {
+					v.acceptSuggestion()
+					return v, nil
+				}
+			}
+		}
+		switch msg.Type {
+		case tea.KeyEsc:
+			if v.queryState == OperationRunning && v.queryCancel != nil {
+				v.queryCancel()
+				return v, nil
+			}
+			if v.showSuggestions {
+				v.showSuggestions = false
+				v.selectedSuggestion = 0
+				v.refreshLayout()
+				return v, nil
+			}
+			if !v.parent.PopView() {
+				v.parent.mode = ViewBrowser
+			}
+			return v, nil
+		case tea.KeyRight:
+			text := v.textarea.Value()
+			li := v.textarea.LineInfo()
+			atEnd := v.textarea.Line() == strings.Count(text, "\n") &&
+				li.ColumnOffset >= len([]rune(strings.Split(text, "\n")[v.textarea.Line()]))
+			if atEnd && v.acceptGhostText() {
+				v.refreshLayout()
+				return v, nil
+			}
+		case tea.KeyCtrlF:
+			text := v.textarea.Value()
+			if text != "" {
+				formatted := formatSQL(text)
+				v.textarea.SetValue(formatted)
+				v.showSuggestions = false
+				v.resetGhostText()
+				v.refreshLayout()
+			}
+			return v, nil
+		case tea.KeyCtrlO:
+			return v, v.openExternalEditor()
+		case tea.KeyCtrlN:
+			v.addTab()
+			v.refreshLayout()
+			return v, nil
+		case tea.KeyCtrlW:
+			v.closeTab()
+			v.refreshLayout()
+			return v, nil
+		case tea.KeyShiftLeft, tea.KeyCtrlPgUp:
+			if len(v.buffers) > 1 && v.activeTab > 0 {
+				v.switchToTab(v.activeTab - 1)
+				v.refreshLayout()
+				return v, nil
+			}
+		case tea.KeyShiftRight, tea.KeyCtrlPgDown:
+			if len(v.buffers) > 1 && v.activeTab < len(v.buffers)-1 {
+				v.switchToTab(v.activeTab + 1)
+				v.refreshLayout()
+				return v, nil
+			}
+		}
+	}
+	keyMsg, isKeyMsg := msg.(tea.KeyMsg)
+	prevText := v.textarea.Value()
+	prevCursorPos := v.cursorPos
+	v.textarea, cmd = v.textarea.Update(msg)
+	v.updateCursorPosition()
+	if isKeyMsg && v.textarea.Focused() {
+		text := v.textarea.Value()
+		if text == prevText && v.cursorPos == prevCursorPos {
+			return v, cmd
+		}
+		if key.Matches(keyMsg, Keys.Global.NextView, Keys.Global.Back, Keys.Global.Quit) {
+			return v, cmd
+		}
+		v.autocompleteSeqID++
+		seqID := v.autocompleteSeqID
+		pos := v.cursorPos
+		debounceCmd := tea.Tick(autocompleteDebounceDelay, func(t time.Time) tea.Msg {
+			return AutocompleteDebounceMsg{SeqID: seqID, Text: text, Pos: pos}
+		})
+		return v, tea.Batch(cmd, debounceCmd)
+	}
+	return v, cmd
+}
+func (v *EditorView) View() string {
+	var b strings.Builder
+	if len(v.buffers) > 1 {
+		for i, buf := range v.buffers {
+			if i == v.activeTab {
+				b.WriteString(styles.ActiveListItemStyle.Render(buf.name))
+			} else {
+				b.WriteString(styles.RenderMuted(" " + buf.name + " "))
+			}
+			b.WriteString(" ")
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString(styles.RenderTitle("SQL Editor"))
+	}
+	b.WriteString("\n\n")
+	if v.queryState == OperationRunning {
+		b.WriteString(v.parent.SpinnerView() + styles.RenderMuted(" Executing query... Press ESC to cancel"))
+		b.WriteString("\n\n")
+	}
+	if onboarding := v.renderOnboarding(); onboarding != "" {
+		b.WriteString(onboarding)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(v.textarea.View())
+	ghost := v.getGhostText()
+	if ghost != "" {
+		b.WriteString("  " + styles.MutedStyle.Render(ghost))
+	}
+	b.WriteString("\n")
+	if v.err != nil {
+		b.WriteString("\n")
+		if v.compact {
+			b.WriteString(styles.RenderError(v.err.Error()))
+		} else {
+			b.WriteString("\n")
+			b.WriteString(styles.RenderErrorBox(v.err.Error()))
+		}
+	}
+	if v.retryPrompt.IsActive() {
+		b.WriteString("\n\n")
+		b.WriteString(styles.RenderKey("Retry with longer timeout?"))
+		b.WriteString("\n")
+		b.WriteString(styles.RenderHelp(
+			"[1]", "60s",
+			"[2]", "2min",
+			"[3]", "5min",
+			"[4]", "no limit",
+			"esc", "cancel",
+		))
+		return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+	}
+	b.WriteString("\n")
+	b.WriteString(v.renderSuggestionArea())
+	if !v.compact {
+		b.WriteString("\n\n")
+		bindings := []key.Binding{
+			Keys.Editor.Execute,
+			Keys.Editor.Explain,
+			Keys.Editor.Autocomplete,
+			Keys.Editor.Format,
+			Keys.Editor.OpenEditor,
+			Keys.Editor.Bookmarks,
+			Keys.Editor.NewTab,
+		}
+		if len(v.buffers) > 1 {
+			bindings = append(bindings, Keys.Editor.PrevTab, Keys.Editor.NextTab, Keys.Editor.CloseTab)
+		}
+		bindings = append(bindings,
+			Keys.Editor.Clear,
+			Keys.Global.NextView,
+			Keys.Global.Back,
+			Keys.Global.Quit,
+		)
+		b.WriteString(renderBindingHelpWidthNoHelp(v.width, bindings...))
+	}
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
+func (v *EditorView) renderOnboarding() string {
+	if strings.TrimSpace(v.textarea.Value()) != "" || v.queryState == OperationRunning || v.retryPrompt.IsActive() {
+		return ""
+	}
+	suggestions := querysuggestions.FromStorageUnits(v.parent.browserView.tables)
+	if len(suggestions) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(styles.RenderKey("Suggested queries"))
+	b.WriteString("\n")
+	for i, suggestion := range suggestions {
+		b.WriteString(styles.RenderMuted(fmt.Sprintf("%d.", i+1)))
+		b.WriteString(" ")
+		b.WriteString(suggestion.Description)
+		if suggestion.Category != "" {
+			b.WriteString(" ")
+			b.WriteString(styles.RenderMuted("[" + suggestion.Category + "]"))
+		}
+		if i < len(suggestions)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+func (v *EditorView) executeQuery() tea.Cmd {
+	query := v.textarea.Value()
+	if query == "" {
+		return func() tea.Msg {
+			return QueryExecutedMsg{Err: fmt.Errorf("query is empty"), Query: ""}
+		}
+	}
+	if v.queryState == OperationRunning {
+		return nil
+	}
+	v.retryPrompt.SetAutoRetried(false)
+	v.queryState = OperationRunning
+	timeout := v.parent.config.GetQueryTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	v.queryCancel = cancel
+	return func() tea.Msg {
+		defer cancel()
+		result, err := v.parent.dbManager.ExecuteQueryWithContext(ctx, query)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return QueryTimeoutMsg{Query: query, Timeout: timeout}
+			}
+			if errors.Is(err, context.Canceled) {
+				return QueryCancelledMsg{Query: query}
+			}
+			return QueryExecutedMsg{Err: err, Query: query}
+		}
+		return QueryExecutedMsg{Result: result, Query: query}
+	}
+}
+func (v *EditorView) executeQueryWithTimeout(query string, timeout time.Duration) tea.Cmd {
+	if query == "" {
+		return func() tea.Msg {
+			return QueryExecutedMsg{Err: fmt.Errorf("query is empty"), Query: ""}
+		}
+	}
+	if v.queryState == OperationRunning {
+		return nil
+	}
+	v.queryState = OperationRunning
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	v.queryCancel = cancel
+	return func() tea.Msg {
+		defer cancel()
+		result, err := v.parent.dbManager.ExecuteQueryWithContext(ctx, query)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return QueryTimeoutMsg{Query: query, Timeout: timeout}
+			}
+			if errors.Is(err, context.Canceled) {
+				return QueryCancelledMsg{Query: query}
+			}
+			return QueryExecutedMsg{Err: err, Query: query}
+		}
+		return QueryExecutedMsg{Result: result, Query: query}
+	}
+}
+func (v *EditorView) applyWindowSize(width, height int) {
+	v.lastWidth = width
+	v.lastHeight = height
+	v.textarea.SetWidth(width - 8)
+	v.suggestionHeight = v.computeSuggestionHeight(height)
+	overhead := 6
+	if !v.compact {
+		overhead += 4
+	}
+	if v.err != nil {
+		overhead += 4
+	}
+	if v.retryPrompt.IsActive() {
+		overhead += 4
+	}
+	if v.queryState == OperationRunning {
+		overhead += 2
+	}
+	targetHeight := height - overhead - v.suggestionHeight
+	if targetHeight < 5 {
+		targetHeight = 5
+	}
+	v.textarea.SetHeight(targetHeight)
+}
+func (v *EditorView) getGhostText() string {
+	text := v.textarea.Value()
+	if text == "" || strings.Contains(text, "\n") {
+		return ""
+	}
+	if v.showSuggestions {
+		return ""
+	}
+	if text != v.ghostPrefix {
+		v.ghostPrefix = text
+		v.ghostSuggestion = ""
+		match := v.parent.histMgr.SearchByPrefix(text)
+		if match != nil {
+			v.ghostSuggestion = match.Query
+		}
+	}
+	if v.ghostSuggestion == "" || !strings.HasPrefix(v.ghostSuggestion, text) {
+		return ""
+	}
+	return v.ghostSuggestion[len(text):]
+}
+func (v *EditorView) acceptGhostText() bool {
+	ghost := v.getGhostText()
+	if ghost == "" {
+		return false
+	}
+	v.textarea.SetValue(v.ghostSuggestion)
+	v.ghostPrefix = v.ghostSuggestion
+	v.ghostSuggestion = ""
+	v.showSuggestions = false
+	return true
+}
+func (v *EditorView) saveCurrentBuffer() {
+	if v.activeTab >= 0 && v.activeTab < len(v.buffers) {
+		v.buffers[v.activeTab].text = v.textarea.Value()
+	}
+}
+func (v *EditorView) switchToTab(idx int) {
+	if idx < 0 || idx >= len(v.buffers) {
+		return
+	}
+	v.saveCurrentBuffer()
+	v.activeTab = idx
+	v.textarea.SetValue(v.buffers[idx].text)
+	v.showSuggestions = false
+	v.resetGhostText()
+}
+func (v *EditorView) addTab() {
+	v.saveCurrentBuffer()
+	name := fmt.Sprintf("Query %d", len(v.buffers)+1)
+	v.buffers = append(v.buffers, queryBuffer{name: name, text: ""})
+	v.activeTab = len(v.buffers) - 1
+	v.textarea.SetValue("")
+	v.showSuggestions = false
+	v.resetGhostText()
+}
+func (v *EditorView) closeTab() {
+	if len(v.buffers) <= 1 {
+		v.buffers[0].text = ""
+		v.textarea.SetValue("")
+		v.showSuggestions = false
+		v.resetGhostText()
+		return
+	}
+	v.buffers = append(v.buffers[:v.activeTab], v.buffers[v.activeTab+1:]...)
+	if v.activeTab >= len(v.buffers) {
+		v.activeTab = len(v.buffers) - 1
+	}
+	v.textarea.SetValue(v.buffers[v.activeTab].text)
+	v.showSuggestions = false
+	v.resetGhostText()
+}
+func (v *EditorView) refreshLayout() {
+	if v.lastWidth > 0 && v.lastHeight > 0 {
+		v.applyWindowSize(v.lastWidth, v.lastHeight)
+	}
+}
+func (v *EditorView) resetGhostText() {
+	v.ghostPrefix = ""
+	v.ghostSuggestion = ""
+}
+type externalEditorResultMsg struct {
+	content string
+	err     error
+}
+func (v *EditorView) openExternalEditor() tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	tmpFile, err := os.CreateTemp("", "whodb-query-*.sql")
+	if err != nil {
+		return func() tea.Msg {
+			return externalEditorResultMsg{err: fmt.Errorf("failed to create temp file: %w", err)}
+		}
+	}
+	content := v.textarea.Value()
+	if _, err := tmpFile.WriteString(content); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return func() tea.Msg {
+			return externalEditorResultMsg{err: fmt.Errorf("failed to write temp file: %w", err)}
+		}
+	}
+	tmpFile.Close()
+	tmpPath := tmpFile.Name()
+	c := exec.Command(editor, tmpPath)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		defer os.Remove(tmpPath)
+		if err != nil {
+			return externalEditorResultMsg{err: fmt.Errorf("editor exited with error: %w", err)}
+		}
+		data, readErr := os.ReadFile(tmpPath)
+		if readErr != nil {
+			return externalEditorResultMsg{err: fmt.Errorf("failed to read back file: %w", readErr)}
+		}
+		return externalEditorResultMsg{content: string(data)}
+	})
+}
+func (v *EditorView) runExplain(query string) tea.Cmd {
+	mgr := v.parent.dbManager
+	return func() tea.Msg {
+		result, err := mgr.ExecuteExplain(query)
+		if err != nil {
+			return explainResultMsg{query: query, err: err}
+		}
+		var lines []string
+		for _, row := range result.Rows {
+			lines = append(lines, strings.Join(row, " "))
+		}
+		plan := strings.Join(lines, "\n")
+		return explainResultMsg{query: query, plan: plan}
+	}
+}

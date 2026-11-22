@@ -1,0 +1,178 @@
+import { isDesktopApp } from '../utils/external-links';
+
+declare global {
+  interface Window {
+    go: {
+      common: {
+        App: {
+          SaveFile: (data: string, defaultName: string) => Promise<string>;
+          SaveBinaryFile: (data: number[], defaultName: string) => Promise<string>;
+          SelectDirectory: () => Promise<string>;
+          SelectDatabaseFile: (dbType: string) => Promise<string>;
+          CopyToClipboard: (text: string) => Promise<void>;
+          GetFromClipboard: () => Promise<string>;
+          MinimizeWindow: () => Promise<void>;
+          MaximizeWindow: () => Promise<void>;
+          ShowMessageDialog: (title: string, message: string, dialogType: string) => Promise<string>;
+          ShowConfirmDialog: (title: string, message: string) => Promise<boolean>;
+          OpenURL: (url: string) => Promise<void>;
+          ShowAboutDialog: () => Promise<void>;
+        };
+      };
+    };
+    runtime: {
+      EventsOn: (event: string, callback: (...args: any[]) => void) => void;
+      EventsOff: (event: string) => void;
+      EventsEmit: (event: string, ...args: any[]) => void;
+    };
+  }
+}
+
+const isDesktop = isDesktopApp();
+
+export async function saveFile(data: string, defaultName: string): Promise<string | null> {
+  if (!isDesktop || !window.go?.common?.App?.SaveFile) {
+    console.warn('Save file not available in browser mode');
+    return null;
+  }
+
+  try {
+    const filepath = await window.go.common.App.SaveFile(data, defaultName);
+    return filepath || null;
+  } catch (error) {
+    console.error('Failed to save file:', error);
+    return null;
+  }
+}
+
+export async function saveBinaryFile(data: Uint8Array, defaultName: string): Promise<string | null> {
+  if (!isDesktop) {
+    console.warn('Save binary file: Not in desktop mode');
+    return null;
+  }
+
+  if (!window.go?.common?.App?.SaveBinaryFile) {
+    console.error('Save binary file: Wails binding not available');
+    return null;
+  }
+
+  try {
+
+    const dataArray = Array.from(data);
+    const filepath = await window.go.common.App.SaveBinaryFile(dataArray as any, defaultName);
+    return filepath || null;
+  } catch (error) {
+    console.error('Failed to save binary file:', error);
+    return null;
+  }
+}
+
+export async function selectDirectory(): Promise<string | null> {
+  if (!isDesktop || !window.go?.common?.App?.SelectDirectory) {
+    console.warn('Select directory not available in browser mode');
+    return null;
+  }
+
+  try {
+    const dir = await window.go.common.App.SelectDirectory();
+    return dir || null;
+  } catch (error) {
+    console.error('Failed to select directory:', error);
+    return null;
+  }
+}
+
+export async function selectDatabaseFile(dbType: string): Promise<string | null> {
+  if (!isDesktop || !window.go?.common?.App?.SelectDatabaseFile) {
+    console.warn('Select database file not available in browser mode');
+    return null;
+  }
+
+  try {
+    const filepath = await window.go.common.App.SelectDatabaseFile(dbType);
+    return filepath || null;
+  } catch (error) {
+    console.error('Failed to select database file:', error);
+    return null;
+  }
+}
+
+export async function minimizeWindow(): Promise<void> {
+  if (!isDesktop || !window.go?.common?.App?.MinimizeWindow) {
+    return;
+  }
+
+  try {
+    await window.go.common.App.MinimizeWindow();
+  } catch (error) {
+    console.error('Failed to minimize window:', error);
+  }
+}
+
+export async function maximizeWindow(): Promise<void> {
+  if (!isDesktop || !window.go?.common?.App?.MaximizeWindow) {
+    return;
+  }
+
+  try {
+    await window.go.common.App.MaximizeWindow();
+  } catch (error) {
+    console.error('Failed to maximize window:', error);
+  }
+}
+
+export async function showMessageDialog(title: string, message: string, type: 'info' | 'warning' | 'error' | 'question' = 'info'): Promise<string | null> {
+  if (!isDesktop || !window.go?.common?.App?.ShowMessageDialog) {
+
+    alert(`${title}\n\n${message}`);
+    return 'ok';
+  }
+
+  try {
+    const result = await window.go.common.App.ShowMessageDialog(title, message, type);
+    return result;
+  } catch (error) {
+    console.error('Failed to show message dialog:', error);
+    return null;
+  }
+}
+
+export async function showConfirmDialog(title: string, message: string): Promise<boolean> {
+  if (!isDesktop || !window.go?.common?.App?.ShowConfirmDialog) {
+
+    return confirm(`${title}\n\n${message}`);
+  }
+
+  try {
+    return await window.go.common.App.ShowConfirmDialog(title, message);
+  } catch (error) {
+    console.error('Failed to show confirm dialog:', error);
+    return false;
+  }
+}
+
+export function onEvent(event: string, callback: (...args: any[]) => void): void {
+  if (!isDesktop || !window.runtime?.EventsOn) {
+    return;
+  }
+
+  window.runtime.EventsOn(event, callback);
+}
+
+export function offEvent(event: string): void {
+  if (!isDesktop || !window.runtime?.EventsOff) {
+    return;
+  }
+
+  window.runtime.EventsOff(event);
+}
+
+export function emitEvent(event: string, ...args: any[]): void {
+  if (!isDesktop || !window.runtime?.EventsEmit) {
+    return;
+  }
+
+  window.runtime.EventsEmit(event, ...args);
+}
+
+export { isDesktop };

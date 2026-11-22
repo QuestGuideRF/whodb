@@ -1,0 +1,153 @@
+import { FC, lazy, ReactNode, Suspense } from "react";
+import { Navigate, Outlet } from "react-router-dom";
+import { useAppSelector } from "../store/hooks";
+import { LogoutPage } from "../pages/auth/logout";
+import { getComponent } from "./component-registry";
+import { featureFlags } from "./features";
+import { LoadingPage } from "../components/loading";
+import { getRegisteredRoutes } from "./route-registry";
+import { useSourceContract } from "../hooks/useSourceContract";
+export { registerRoute } from "./route-registry";
+
+const LoginPage = getComponent('login-page')
+    ?? lazy(() => import("../pages/auth/login").then(m => ({ default: m.LoginPage })));
+
+const GraphPage = lazy(() => import("../pages/graph/graph").then(m => ({ default: m.GraphPage })));
+const ExploreStorageUnit = lazy(() => import("../pages/storage-unit/explore-storage-unit").then(m => ({ default: m.ExploreStorageUnit })));
+const StorageUnitPage = lazy(() => import("../pages/storage-unit/storage-unit").then(m => ({ default: m.StorageUnitPage })));
+const RawExecutePage = lazy(() => import("../pages/raw-execute/raw-execute").then(m => ({ default: m.RawExecutePage })));
+const ChatPage = lazy(() => import("../pages/chat/chat").then(m => ({ default: m.ChatPage })));
+const SettingsPage = lazy(() => import("../pages/settings/settings").then(m => ({ default: m.SettingsPage })));
+const ContactUsPage = lazy(() => import("../pages/contact-us/contact-us").then(m => ({ default: m.ContactUsPage })));
+const SQLAgentPage = getComponent('sql-agent') ?? null;
+
+const LazyRoute: FC<{ component: React.ComponentType<any> }> = ({ component: Component }) => (
+  <Suspense fallback={<LoadingPage />}>
+    <Component />
+  </Suspense>
+);
+
+const SourceSurfaceRoute: FC<{
+    surface: "chat" | "graph" | "scratchpad";
+    component: ReactNode;
+}> = ({ surface, component }) => {
+    const current = useAppSelector(state => state.auth.current);
+    const { loading, supportsChat, supportsGraph, supportsScratchpad } = useSourceContract(current?.Type);
+
+    if (loading) {
+        return <LoadingPage />;
+    }
+
+    const isAllowed = surface === "chat"
+        ? supportsChat
+        : surface === "graph"
+            ? supportsGraph
+            : supportsScratchpad;
+
+    if (!isAllowed) {
+        return <Navigate to="/storage-unit" replace />;
+    }
+
+    return <>{component}</>;
+};
+
+export type IInternalRoute = {
+    name: string;
+    path: string;
+    component: ReactNode;
+    public?: boolean;
+}
+
+export const PublicRoutes = {
+    Login: {
+        name: "Login",
+        path: "/login",
+        component: <Suspense fallback={<LoadingPage />}><LoginPage /></Suspense>,
+    },
+}
+
+export const InternalRoutes = {
+    Dashboard: {
+        StorageUnit: {
+            name: "Storage Unit", // should update on the page
+            path: "/storage-unit",
+            component: <LazyRoute component={StorageUnitPage} />,
+        },
+        ExploreStorageUnit: {
+            name: "Explore",
+            path: "/storage-unit/explore",
+            component: <LazyRoute component={ExploreStorageUnit} />,
+        },
+    },
+    Graph: {
+        name: "Graph",
+        path: "/graph",
+        component: <SourceSurfaceRoute surface="graph" component={<LazyRoute component={GraphPage} />} />,
+    },
+    RawExecute: {
+        name: "Scratchpad",
+        path: "/scratchpad",
+        component: <SourceSurfaceRoute surface="scratchpad" component={<LazyRoute component={RawExecutePage} />} />,
+    },
+    Chat: {
+        name: "Chat",
+        path: "/chat",
+        component: SQLAgentPage
+            ? <Suspense fallback={<LoadingPage />}><SQLAgentPage /></Suspense>
+            : (
+                <SourceSurfaceRoute
+                    surface="chat"
+                    component={<LazyRoute component={ChatPage} />}
+                />
+            ),
+    },
+    Logout: {
+        name: "Logout",
+        path: "/logout",
+        component: <LogoutPage />,
+    },
+    ...(featureFlags.settingsPage ? {
+        Settings: {
+            name: "Settings",
+            path: "/settings",
+            component: <LazyRoute component={SettingsPage} />
+        }
+    } : {}),
+    ...(featureFlags.contactUsPage ? {
+        ContactUs: {
+            name: "Contact Us",
+            path: "/contact-us",
+            component: <LazyRoute component={ContactUsPage} />
+        }
+    } : {})
+}
+
+export const PrivateRoute: FC = () => {
+    const loggedIn = useAppSelector(state => state.auth.status === "logged-in");
+    if(loggedIn) {
+        return <Outlet />;
+    }
+    return <Navigate to={PublicRoutes.Login.path} />
+}
+
+export const getRoutes = (): IInternalRoute[] => {
+    const allRoutes: IInternalRoute[] = [];
+    const currentRoutes = Object.values(InternalRoutes);
+    while (currentRoutes.length > 0) {
+        const currentRoute = currentRoutes.shift();
+        if (currentRoute == null) {
+            continue;
+        }
+        if ("path" in currentRoute) {
+            allRoutes.push(currentRoute);
+            continue;
+        }
+        currentRoutes.push(...Object.values((currentRoute)));
+    }
+    const extra = getRegisteredRoutes().map(({ name, path, lazyComponent }) => ({
+        name,
+        path,
+        component: <LazyRoute component={lazyComponent} />,
+    }));
+    return [...allRoutes, ...extra];
+}

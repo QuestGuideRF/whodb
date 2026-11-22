@@ -1,0 +1,5 @@
+mutation AddRow($ref: SourceObjectRefInput!, $values: [RecordInput!]!) {
+  AddRow: AddSourceRow(ref: $ref, values: $values) {
+    Status
+  }
+}

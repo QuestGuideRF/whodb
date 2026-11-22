@@ -1,0 +1,5 @@
+mutation UpdateStorageUnit($ref: SourceObjectRefInput!, $values: [RecordInput!]!, $updatedColumns: [String!]!) {
+  UpdateStorageUnit: UpdateSourceObject(ref: $ref, values: $values, updatedColumns: $updatedColumns) {
+    Status
+  }
+}

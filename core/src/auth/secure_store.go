@@ -1,0 +1,61 @@
+package auth
+import (
+	"encoding/json"
+	"github.com/clidey/whodb/core/src/env"
+	"github.com/clidey/whodb/core/src/source"
+	"github.com/zalando/go-keyring"
+)
+var keyringService = getKeyringService()
+func getKeyringService() string {
+	base := "WhoDB"
+	if env.IsEnterpriseEdition {
+		base = "WhoDB-EE"
+	}
+	if env.IsDevelopment {
+		return base + "-Dev"
+	}
+	return base
+}
+func GetKeyringServiceName() string { return keyringService }
+func keyForProfile(id string) string {
+	return "profile:" + id
+}
+func SaveCredentials(id string, creds *source.Credentials) error {
+	if !env.GetIsDesktopMode() {
+		return nil
+	}
+	if id == "" || creds == nil {
+		return nil
+	}
+	data, err := json.Marshal(creds)
+	if err != nil {
+		return err
+	}
+	return keyring.Set(keyringService, keyForProfile(id), string(data))
+}
+func LoadCredentials(id string) (*source.Credentials, error) {
+	if !env.GetIsDesktopMode() {
+		return nil, keyring.ErrNotFound
+	}
+	if id == "" {
+		return nil, keyring.ErrNotFound
+	}
+	val, err := keyring.Get(keyringService, keyForProfile(id))
+	if err != nil {
+		return nil, err
+	}
+	var creds source.Credentials
+	if err := json.Unmarshal([]byte(val), &creds); err != nil {
+		return nil, err
+	}
+	return &creds, nil
+}
+func DeleteCredentials(id string) error {
+	if !env.GetIsDesktopMode() {
+		return nil
+	}
+	if id == "" {
+		return nil
+	}
+	return keyring.Delete(keyringService, keyForProfile(id))
+}

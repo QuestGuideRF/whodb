@@ -1,0 +1,13 @@
+query Columns($ref: SourceObjectRefInput!) {
+    Columns: SourceColumns(ref: $ref) {
+        Name
+        Type
+        IsPrimary
+        IsForeignKey
+        ReferencedTable
+        ReferencedColumn
+        Length
+        Precision
+        Scale
+    }
+}

@@ -1,0 +1,5 @@
+mutation LoginWithSourceProfile($profile: SourceProfileLoginInput!) {
+  LoginWithSourceProfile(profile: $profile) {
+    Status
+  }
+}

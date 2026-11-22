@@ -1,0 +1,26 @@
+services:
+  screenshot_postgres:
+    image: postgres
+    container_name: screenshot_postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: jio53$*(@nfe)
+      PGDATA: /data/postgres
+      POSTGRES_DB: test_db
+    volumes:
+      - screenshot_postgres:/data/postgres
+      - ./sample-data/postgres/data.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d test_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+networks:
+  db:
+    driver: bridge
+volumes:
+  screenshot_postgres:

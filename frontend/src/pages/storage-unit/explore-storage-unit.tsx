@@ -1,0 +1,1206 @@
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    Badge,
+    Button,
+    cn,
+    Drawer,
+    DrawerContent,
+    DrawerHeader,
+    DrawerTitle,
+    Input,
+    Label,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    Sheet,
+    SheetContent,
+    SheetFooter,
+    SheetTitle,
+    StackList,
+    StackListItem,
+    toast,
+} from "@clidey/ux";
+import {skipToken, useLazyQuery, useMutation, useQuery} from "@apollo/client/react";
+import {
+    AddRowDocument,
+    ColumnsDocument,
+    DataShape,
+    GetSourceContentDocument,
+    GetStorageUnitRowsDocument,
+    GetStorageUnitsQuery,
+    RecordInput,
+    RawExecuteDocument,
+    RowsResult,
+    SortCondition,
+    SortDirection,
+    SourceAction,
+    type SourceObjectRefInput,
+    UpdateStorageUnitDocument,
+    WhereCondition,
+    WhereConditionType
+} from '@graphql';
+import {FC, useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {Navigate, useLocation, useNavigate} from "react-router-dom";
+import {CodeEditor} from "../../components/editor";
+import {ErrorState} from "../../components/error-state";
+import {
+    CheckCircleIcon,
+    CommandLineIcon,
+    MagnifyingGlassIcon,
+    PlayIcon,
+    PlusCircleIcon,
+    TableCellsIcon,
+    XMarkIcon
+} from "../../components/heroicons";
+import {Loading, LoadingPage} from "../../components/loading";
+import {InternalPage} from "../../components/page";
+import {SchemaViewer} from "../../components/schema-viewer";
+import {getColumnIcons, getInputPropsForColumnType, StorageUnitTable} from "../../components/table";
+import {Tip} from "../../components/tip";
+import {InternalRoutes} from "../../config/routes";
+import {useSourceContract} from "../../hooks/useSourceContract";
+import {useAppDispatch, useAppSelector} from "../../store/hooks";
+import {ExploreConditionsActions} from "../../store/explore-conditions";
+import {getSourceOperators} from "../../utils/source-operators";
+import {usePageSize} from "../../hooks/use-page-size";
+import {ExploreStorageUnitWhereCondition} from "./explore-storage-unit-where-condition";
+import {ExploreStorageUnitWhereConditionSheet} from "./explore-storage-unit-where-condition-sheet";
+import {useTranslation} from "../../hooks/use-translation";
+import {whereConditionToSql} from "../../utils/where-condition-to-sql";
+import {isDestructiveQuery} from "../../utils/query-utils";
+import {useContainerWidth} from "../../hooks/use-container-width";
+import {getComponent} from "../../config/component-registry";
+import { findSourceObjectType } from "../../config/source-types";
+import {buildSourceObjectRef, buildSourceParentObjectRef} from "../../utils/source-refs";
+
+type SourceBrowserObject = GetStorageUnitsQuery['StorageUnit'][number];
+
+type ExploreSourceState = {
+    unit?: SourceBrowserObject;
+    parentRef?: SourceObjectRefInput;
+    trail?: SourceBrowserObject[];
+};
+
+type EESearchBarProps = {
+    columns: string[];
+    columnTypes: (string | undefined)[];
+    validOperators: string[];
+    onConditionChange: (condition: WhereCondition | undefined) => void;
+    onSubmit: () => void;
+};
+
+export const ExploreStorageUnit: FC = () => {
+    const location = useLocation();
+    const defaultPageSize = useAppSelector(state => state.settings.defaultPageSize);
+    const maxPageSize = useAppSelector(state => state.settings.maxPageSize);
+    const pageSizeOptions = useMemo(() => ({ maxPageSize }), [maxPageSize]);
+    const {
+        pageSize,
+        pageSizeString,
+        isCustom: isCustomPageSize,
+        customInput: customPageSizeInput,
+        setCustomInput: setCustomPageSizeInput,
+        handleSelectChange: handlePageSizeChange,
+        handleCustomApply: handleCustomPageSizeApply,
+    } = usePageSize(defaultPageSize, pageSizeOptions);
+    const { t } = useTranslation('pages/explore-storage-unit');
+    const { t: tTable } = useTranslation('components/table');
+
+    let schema = useAppSelector(state => state.database.schema);
+    const current = useAppSelector(state => state.auth.current);
+    const {
+        item,
+        isNoSQL,
+        storageUnitLabel,
+        supportsScratchpad,
+        usesDatabaseInsteadOfSchema,
+    } = useSourceContract(current?.Type);
+    const whereConditionMode = useAppSelector(state => state.settings.whereConditionMode);
+    const locationState = location.state as ExploreSourceState | undefined;
+    const unit = locationState?.unit;
+    const browserTrail = locationState?.trail ?? [];
+    const navigate = useNavigate();
+
+    if (usesDatabaseInsteadOfSchema && current?.Database) {
+        schema = current.Database;
+    }
+
+    const currentObjectType = useMemo(() => findSourceObjectType(item, unit?.Kind), [item, unit?.Kind]);
+    const currentObjectActions = unit?.Actions ?? currentObjectType?.Actions ?? [];
+    const isTabularObject = currentObjectType?.DataShape === DataShape.Tabular || currentObjectType?.DataShape === DataShape.Document;
+    const isContentObject = currentObjectType?.DataShape === DataShape.Content || unit?.Actions?.includes(SourceAction.ViewContent) === true;
+    const allowsInsertData = currentObjectActions.includes(SourceAction.InsertData);
+    const allowsUpdateData = currentObjectActions.includes(SourceAction.UpdateData);
+    const allowsDeleteData = currentObjectActions.includes(SourceAction.DeleteData);
+    const currentParentRef = useMemo(() => {
+        if (locationState?.parentRef) {
+            return locationState.parentRef;
+        }
+        if (!unit) {
+            return undefined;
+        }
+        return buildSourceParentObjectRef(item, unit.Ref);
+    }, [item, locationState?.parentRef, unit]);
+
+    const dispatch = useAppDispatch();
+    const conditionKey = useMemo(() => {
+        if (!current?.Id || !unit?.Name) return '';
+        return `${current.Id}__${schema}__${unit.Name}`;
+    }, [current?.Id, schema, unit?.Name]);
+    const savedConditions = useAppSelector(state =>
+        conditionKey ? state.exploreConditions.conditions[conditionKey] : undefined
+    );
+
+    const [currentPage, setCurrentPage] = useState(1);
+    const [whereCondition, setWhereCondition] = useState<WhereCondition | undefined>(savedConditions?.whereCondition);
+    const [sortConditions, setSortConditions] = useState<SortCondition[]>(savedConditions?.sortConditions ?? []);
+    const [isScratchpadOpen, setIsScratchpadOpen] = useState(false);
+
+    const isMockDataGenerationAllowed = useMemo(() => {
+        if (!unit?.Attributes) return true;
+        const typeAttr = unit.Attributes.find(attr => attr.Key === "Type");
+        if (!typeAttr) return true;
+        const upperType = typeAttr.Value.toUpperCase();
+        return !upperType.includes("VIEW") && !upperType.includes("MATERIALIZED") && !upperType.includes("SYSTEM");
+    }, [unit?.Attributes]);
+
+    const [rows, setRows] = useState<RowsResult>();
+    const [showAdd, setShowAdd] = useState(false);
+    const searchRef = useRef<(search: string) => void>(() => {});
+    const [localSearch, setLocalSearch] = useState("");
+    const [searchCondition, setSearchCondition] = useState<WhereCondition | undefined>();
+    const [EESearchBar, setEESearchBar] = useState<FC<EESearchBarProps> | null>(null);
+
+    const latestRequestIdRef = useRef(0);
+
+    const whereConditionRef = useRef<WhereCondition | undefined>(whereCondition);
+    const [currentTableName, setCurrentTableName] = useState<string>("");
+
+    const [addRowData, setAddRowData] = useState<Record<string, any>>({});
+    const [addRowError, setAddRowError] = useState<string | null>(null);
+
+    const [showEntitySearchSheet, setShowEntitySearchSheet] = useState(false);
+    const [entitySearchData, setEntitySearchData] = useState<{
+        columnName: string;
+        value: string;
+        targetTable: string;
+    } | null>(null);
+    const [entitySearchResults, setEntitySearchResults] = useState<RowsResult | null>(null);
+
+    const addRowTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+    const tableContainerRef = useRef<HTMLDivElement>(null);
+    const scratchpadResultsRef = useRef<HTMLDivElement>(null);
+    const scratchpadContainerWidth = useContainerWidth(scratchpadResultsRef);
+    const pageSizeInitialRef = useRef(true);
+    const [tableHeight, setTableHeight] = useState<number>(500);
+
+    const [updateStorageUnit] = useMutation(UpdateStorageUnitDocument);
+
+    useEffect(() => {
+        const SearchBarComponent = getComponent('search-bar');
+        if (SearchBarComponent) {
+            setEESearchBar(() => SearchBarComponent as unknown as FC<EESearchBarProps>);
+        }
+    }, []);
+
+    useEffect(() => {
+        whereConditionRef.current = whereCondition;
+    }, [whereCondition]);
+
+    useEffect(() => {
+        return () => {
+            clearTimeout(addRowTimeoutRef.current);
+        };
+    }, []);
+
+    const [getStorageUnitRows, { loading }] = useLazyQuery(GetStorageUnitRowsDocument, {
+        fetchPolicy: "no-cache",
+    });
+    const [getColumns] = useLazyQuery(ColumnsDocument, {
+        fetchPolicy: "network-only",
+    });
+    const [addRow, { loading: adding }] = useMutation(AddRowDocument);
+    const [rawExecute, { data: rawExecuteData, error: rawExecuteError }] = useLazyQuery(RawExecuteDocument);
+
+    const unitName = useMemo(() => {
+        return unit?.Name;
+    }, [unit]);
+    const currentUnitRef = unit?.Ref;
+    const sourceContentQueryOptions = currentUnitRef && isContentObject
+        ? {
+            variables: { ref: currentUnitRef },
+            fetchPolicy: "cache-first" as const,
+        }
+        : skipToken;
+    const { data: sourceContentData, loading: sourceContentLoading } = useQuery(GetSourceContentDocument, sourceContentQueryOptions);
+    const sourceContent = sourceContentData?.Content;
+    const sourceContentLanguage = useMemo(() => {
+        if (!sourceContent?.Text) {
+            return undefined;
+        }
+        if (sourceContent.MIMEType.includes("json")) {
+            return "json" as const;
+        }
+        if (sourceContent.MIMEType.includes("markdown")) {
+            return "markdown" as const;
+        }
+        return undefined;
+    }, [sourceContent?.MIMEType, sourceContent?.Text]);
+
+    const initialScratchpadQuery = useMemo(() => {
+        const qualified = schema ? `${schema}.${unitName}` : unitName;
+        return `SELECT * FROM ${qualified} LIMIT 5`;
+    }, [schema, unitName]);
+
+    const scratchpadQueryWithConditions = useMemo(() => {
+        const whereClause = whereConditionToSql(whereCondition);
+
+        if (!whereClause) {
+            return initialScratchpadQuery;
+        }
+
+        const limitMatch = initialScratchpadQuery.match(/\s+LIMIT\s+\d+/i);
+        if (limitMatch) {
+            const beforeLimit = initialScratchpadQuery.substring(0, limitMatch.index);
+            const limitPart = initialScratchpadQuery.substring(limitMatch.index!);
+            return `${beforeLimit} WHERE ${whereClause}${limitPart}`;
+        }
+
+        return `${initialScratchpadQuery} WHERE ${whereClause}`;
+    }, [initialScratchpadQuery, whereCondition]);
+
+    const [code, setCode] = useState(initialScratchpadQuery);
+
+    const {columns, columnTypes, columnIsPrimary, columnIsForeignKey} = useMemo(() => {
+        const dataColumns = rows?.Columns.map(c => c.Name) ?? [];
+        return {
+            columns: dataColumns,
+            columnTypes: rows?.Columns.map(column => column.Type),
+            columnIsPrimary: rows?.Columns.map(column => column.IsPrimary),
+            columnIsForeignKey: rows?.Columns.map(column => column.IsForeignKey)
+        };
+    }, [rows?.Columns]);
+
+    const validOperators = useMemo(() => {
+        if (!current?.Type) {
+            return [];
+        }
+        return getSourceOperators(current.Type);
+    }, [current?.Type]);
+
+    const {whereColumns, whereColumnTypes} = useMemo(() => {
+        if (rows?.Columns == null || rows?.Columns.length === 0 || rows == null || rows.Rows.length === 0) {
+            return {whereColumns: [], whereColumnTypes: []};
+        }
+        if (rows?.Columns.length === 1 && rows?.Columns[0].Type === "Document" && isNoSQL) {
+            const whereColumns = Object.keys(JSON.parse(rows?.Rows[0][0]));
+            const whereColumnTypes = whereColumns.map(() => "string");
+            return {whereColumns, whereColumnTypes}
+        }
+        return {whereColumns: columns, whereColumnTypes: columnTypes}
+    }, [rows?.Columns, rows?.Rows, isNoSQL, columns, columnTypes]);
+
+    const handleSubmitRequest = useCallback((pageOffset: number | null = null) => {
+        if (!isTabularObject) {
+            return;
+        }
+        const tableNameToUse = unitName || currentTableName;
+        if (tableNameToUse) {
+            setCurrentTableName(tableNameToUse);
+        }
+
+        latestRequestIdRef.current += 1;
+        const thisRequestId = latestRequestIdRef.current;
+
+        const currentWhereCondition = whereConditionRef.current;
+        const ref = tableNameToUse === unitName
+            ? currentUnitRef
+            : buildSourceObjectRef(item, current, schema, tableNameToUse);
+        if (!ref) {
+            return;
+        }
+
+        const mergedCondition = searchCondition && currentWhereCondition
+            ? { Type: WhereConditionType.And, And: { Children: [currentWhereCondition, searchCondition] } }
+            : searchCondition || currentWhereCondition;
+
+        getStorageUnitRows({
+            variables: {
+                ref,
+                where: mergedCondition,
+                sort: sortConditions.length > 0 ? sortConditions : undefined,
+                pageSize,
+                pageOffset: pageOffset ?? (currentPage - 1) * pageSize,
+            },
+        }).then(result => {
+            const isLatest = thisRequestId === latestRequestIdRef.current;
+            if (isLatest && result.data) {
+                setRows(result.data.Row);
+            }
+        });
+    }, [current, currentPage, currentTableName, currentUnitRef, getStorageUnitRows, isTabularObject, item, pageSize, schema, searchCondition, sortConditions, unitName]);
+
+    const handleQuery = useCallback(() => {
+        setCurrentPage(1);
+        handleSubmitRequest(0);
+    }, [handleSubmitRequest]);
+
+    const handlePageChange = useCallback((page: number) => {
+        setCurrentPage(page);
+        handleSubmitRequest((page - 1) * pageSize);
+    }, [handleSubmitRequest]);
+
+    const handleColumnSort = useCallback((columnName: string) => {
+        const existingSort = sortConditions.find(s => s.Column === columnName);
+        let newSort: SortCondition[];
+        if (!existingSort) {
+            newSort = [...sortConditions, { Column: columnName, Direction: SortDirection.Asc }];
+        } else if (existingSort.Direction === SortDirection.Asc) {
+            newSort = sortConditions.map(s => s.Column === columnName ? { ...s, Direction: SortDirection.Desc } : s);
+        } else {
+            newSort = sortConditions.filter(s => s.Column !== columnName);
+        }
+        setSortConditions(newSort);
+        if (conditionKey) {
+            dispatch(ExploreConditionsActions.setExploreConditions({
+                key: conditionKey,
+                whereCondition,
+                sortConditions: newSort,
+            }));
+        }
+    }, [sortConditions, conditionKey, whereCondition, dispatch]);
+
+    const handleRowUpdate = useCallback(
+        (
+            row: Record<string, string | number>,
+            originalRow?: Record<string, string | number>
+        ) => {
+            if (!current) {
+                return Promise.resolve();
+            }
+
+            return new Promise<void>((resolve, reject) => {
+
+                const changedColumns = originalRow
+                    ? Object.keys(row).filter((col) => row[col] !== originalRow[col])
+                    : Object.keys(row);
+
+                if (changedColumns.length === 0) {
+
+                    return Promise.resolve();
+                }
+
+                const allColumns = Object.keys(row);
+                const values = allColumns.map((col) => ({
+                    Key: col,
+                    Value: row[col].toString(),
+                }));
+                if (!currentUnitRef) {
+                    return reject(new Error("Missing source object ref"));
+                }
+
+                updateStorageUnit({
+                    variables: {
+                        ref: currentUnitRef,
+                        values,
+                        updatedColumns: changedColumns,
+                    },
+                    onCompleted: (data) => {
+                        if (!data?.UpdateStorageUnit.Status) {
+                            return reject(new Error("Update failed"));
+                        }
+                        return resolve();
+                    },
+                    onError: (error) => {
+                        return reject(error);
+                    },
+                });
+            });
+        },
+        [current, currentUnitRef]
+    );
+
+    const totalCount = useMemo(() => {
+        if (rows?.TotalCount != null && rows.TotalCount > 0) {
+            return rows.TotalCount.toString();
+        }
+        const count = unit?.Attributes.find(attribute => attribute.Key === "Count")?.Value;
+        if (count != null && count !== "0" && count !== "unknown") {
+            return count;
+        }
+        return rows?.Rows.length?.toString() ?? "unknown";
+    }, [unit, rows?.TotalCount, rows?.Rows.length]);
+
+    useEffect(() => {
+
+        setCurrentPage(1);
+        setRows(undefined);
+        setShowAdd(false);
+        setAddRowData({});
+        setAddRowError(null);
+        setShowEntitySearchSheet(false);
+        setEntitySearchData(null);
+        setEntitySearchResults(null);
+        setLocalSearch("");
+        searchRef.current("");
+        setSearchCondition(undefined);
+
+        const restoredWhere = savedConditions?.whereCondition;
+        const restoredSort = savedConditions?.sortConditions ?? [];
+        setWhereCondition(restoredWhere);
+        whereConditionRef.current = restoredWhere;
+        setSortConditions(restoredSort);
+
+        if (isTabularObject) {
+            handleSubmitRequest();
+        }
+        setCode(initialScratchpadQuery);
+
+    }, [isTabularObject, unit]);
+
+    useEffect(() => {
+        if (isTabularObject && sortConditions.length > 0) {
+            handleSubmitRequest();
+        }
+
+    }, [isTabularObject, sortConditions]);
+
+    useEffect(() => {
+        if (pageSizeInitialRef.current) {
+            pageSizeInitialRef.current = false;
+            return;
+        }
+        if (!isTabularObject) {
+            return;
+        }
+        setCurrentPage(1);
+        handleSubmitRequest(0);
+
+    }, [isTabularObject, pageSize]);
+
+    const routes = useMemo(() => {
+        return [
+            {
+                ...InternalRoutes.Dashboard.StorageUnit,
+                name: storageUnitLabel,
+            },
+            InternalRoutes.Dashboard.ExploreStorageUnit,
+        ];
+    }, [storageUnitLabel]);
+
+    useEffect(() => {
+        window.dispatchEvent(new CustomEvent('table:columns-available', {
+            detail: { columns }
+        }));
+        return () => {
+            window.dispatchEvent(new CustomEvent('table:columns-available', {
+                detail: { columns: [] }
+            }));
+        };
+    }, [columns]);
+
+    useEffect(() => {
+        const handleSortColumn = (event: CustomEvent<{ column: string }>) => {
+            handleColumnSort(event.detail.column);
+        };
+        window.addEventListener('table:sort-column', handleSortColumn as EventListener);
+        return () => {
+            window.removeEventListener('table:sort-column', handleSortColumn as EventListener);
+        };
+    }, [handleColumnSort]);
+
+    useEffect(() => {
+        if (unit == null && !currentTableName) {
+            navigate(InternalRoutes.Dashboard.StorageUnit.path);
+        }
+    }, [navigate, unit, currentTableName]);
+
+    useEffect(() => {
+        const updateTableHeight = () => {
+            if (tableContainerRef.current) {
+
+                const rect = tableContainerRef.current.getBoundingClientRect();
+
+                const availableHeight = window.innerHeight - rect.top - 40;
+
+                const reservedSpace = 260;
+
+                const calculatedHeight = Math.max(300, availableHeight - reservedSpace);
+                setTableHeight(calculatedHeight);
+            }
+        };
+
+        const timeoutId = setTimeout(updateTableHeight, 0);
+
+        window.addEventListener('resize', updateTableHeight);
+
+        const resizeObserver = new ResizeObserver(updateTableHeight);
+        if (tableContainerRef.current) {
+            resizeObserver.observe(tableContainerRef.current);
+        }
+
+        return () => {
+            clearTimeout(timeoutId);
+            window.removeEventListener('resize', updateTableHeight);
+            resizeObserver.disconnect();
+        };
+    }, [rows]);
+
+    const handleFilterChange = useCallback((filters: WhereCondition) => {
+        whereConditionRef.current = filters;
+        setWhereCondition(filters);
+        if (conditionKey) {
+            dispatch(ExploreConditionsActions.setExploreConditions({
+                key: conditionKey,
+                whereCondition: filters,
+                sortConditions,
+            }));
+        }
+    }, [conditionKey, sortConditions, dispatch]);
+
+    const sortedColumnsMap = useMemo(() => {
+        const map = new Map<string, 'asc' | 'desc'>();
+        sortConditions.forEach(cond => {
+            map.set(cond.Column, cond.Direction === SortDirection.Asc ? 'asc' : 'desc');
+        });
+        return map;
+    }, [sortConditions]);
+
+    const handleOpenAddSheet = useCallback(() => {
+
+        let initialData: Record<string, any> = {};
+        if (rows?.Columns) {
+
+            for (const col of rows.Columns) {
+                initialData[col.Name] = "";
+            }
+        }
+        setAddRowData(initialData);
+        setAddRowError(null);
+        setShowAdd(true);
+    }, [rows?.Columns]);
+
+    const handleAddRowFieldChange = useCallback((key: string, value: string) => {
+        setAddRowData(prev => ({
+            ...prev,
+            [key]: value,
+        }));
+    }, []);
+
+    const handleAddRowSubmit = useCallback(() => {
+        if (rows?.Columns == null) return;
+        let values: RecordInput[] = [];
+        if (isNoSQL && rows.Columns.length === 1 && rows.Columns[0].Type === "Document") {
+            try {
+                const json = JSON.parse(addRowData.document);
+                for (const key of Object.keys(json)) {
+                    const val = json[key];
+
+                    const stringValue = typeof val === 'object' && val !== null
+                        ? JSON.stringify(val)
+                        : val;
+                    values.push({
+                        Key: key,
+                        Value: stringValue,
+                    });
+                }
+            } catch (e) {
+                setAddRowError(t('invalidJson'));
+                return;
+            }
+        } else {
+            for (const col of rows.Columns) {
+                if (addRowData[col.Name] !== undefined && addRowData[col.Name] !== "") {
+                    values.push({
+                        Key: col.Name,
+                        Value: addRowData[col.Name],
+                    });
+                }
+            }
+        }
+
+        if (values.length === 0) {
+            setAddRowError(t('fillAtLeastOneValue'));
+            return;
+        }
+        addRow({
+            variables: {
+                ref: currentUnitRef ?? buildSourceObjectRef(item, current, schema, unit?.Name || unitName || currentTableName || ""),
+                values,
+            },
+            onCompleted() {
+                toast.success(t('addRowSuccess'));
+                setShowAdd(false);
+                addRowTimeoutRef.current = setTimeout(() => {
+                    handleSubmitRequest();
+                }, 500);
+            },
+            onError(e) {
+                setAddRowError(e.message);
+                const errorMessage = t('addRowError').replace('{error}', e.message);
+                toast.error(errorMessage);
+            },
+        });
+    }, [addRow, addRowData, current, currentTableName, currentUnitRef, handleSubmitRequest, isNoSQL, item, rows?.Columns, schema, t, unit?.Name, unitName]);
+
+    const [pendingScratchpadQuery, setPendingScratchpadQuery] = useState<string | null>(null);
+
+    const doScratchpadExecute = useCallback((query: string) => {
+        rawExecute({ variables: { query } });
+    }, [rawExecute]);
+
+    const handleScratchpad = useCallback((specificCode?: string) => {
+        if (current == null) {
+            return;
+        }
+        const query = specificCode ?? code;
+        if (isDestructiveQuery(query)) {
+            setPendingScratchpadQuery(query);
+        } else {
+            doScratchpadExecute(query);
+        }
+    }, [code, current, doScratchpadExecute]);
+
+    const handleOpenScratchpad = useCallback(() => {
+        setIsScratchpadOpen(true);
+        setCode(scratchpadQueryWithConditions);
+        handleScratchpad(scratchpadQueryWithConditions);
+    }, [handleScratchpad, scratchpadQueryWithConditions]);
+
+    const handleCloseScratchpad = useCallback(() => {
+        setIsScratchpadOpen(false);
+    }, []);
+
+    const columnIcons = useMemo(() => getColumnIcons(columns, columnTypes, tTable), [columns, columnTypes, tTable]);
+
+    const getColumnByName = useCallback((columnName: string) => {
+        return rows?.Columns?.find(col => col.Name === columnName);
+    }, [rows?.Columns]);
+
+    const isValidForeignKey = useCallback((columnName: string) => {
+        const column = getColumnByName(columnName);
+        return Boolean(column?.IsForeignKey && column?.ReferencedTable != null);
+    }, [getColumnByName]);
+
+    const getTargetTableName = useCallback((columnName: string) => {
+        const column = getColumnByName(columnName);
+        return column?.ReferencedTable || null;
+    }, [getColumnByName]);
+
+    const handleEntitySearch = useCallback((columnName: string, value: string) => {
+        const targetTable = getTargetTableName(columnName);
+        if (!targetTable) {
+            toast.error(t('couldNotDetermineTargetTable'));
+            return;
+        }
+
+        setEntitySearchData({
+            columnName,
+            value,
+            targetTable
+        });
+
+        const targetTableRef = buildSourceObjectRef(item, current, schema, targetTable);
+        if (!targetTableRef) {
+            toast.error(t('couldNotDetermineTargetTable'));
+            return;
+        }
+
+        void getColumns({
+            variables: {
+                ref: targetTableRef,
+            },
+        }).then(({ data, error }) => {
+            if (error) {
+                throw error;
+            }
+
+            const targetPrimaryKey = data?.Columns?.find(col => col.IsPrimary);
+
+            if (!targetPrimaryKey) {
+                const errorMessage = t('noPrimaryKeyFound').replace('{table}', targetTable);
+                toast.error(errorMessage);
+                return;
+            }
+
+            const primaryKeyName = targetPrimaryKey.Name;
+
+            void getStorageUnitRows({
+                variables: {
+                    ref: targetTableRef,
+                    where: {
+                        Type: WhereConditionType.Atomic,
+                        Atomic: {
+                            Key: primaryKeyName,
+                            Operator: "=",
+                            Value: value,
+                            ColumnType: "string"
+                        }
+                    },
+                    pageSize: 1,
+                    pageOffset: 0
+                },
+            }).then(({ data, error }) => {
+                if (error) {
+                    throw error;
+                }
+
+                setEntitySearchResults(data?.Row ?? null);
+                setShowEntitySearchSheet(true);
+            }).catch((error: unknown) => {
+                const errorMessage = t('failedToSearchEntity').replace(
+                    '{error}',
+                    error instanceof Error ? error.message : String((error as { message?: string }).message ?? '')
+                );
+                toast.error(errorMessage);
+            });
+        }).catch((error: unknown) => {
+            const errorMessage = t('failedToGetTargetTableStructure').replace(
+                '{error}',
+                error instanceof Error ? error.message : String((error as { message?: string }).message ?? '')
+            );
+            toast.error(errorMessage);
+        });
+    }, [current, getColumns, getStorageUnitRows, getTargetTableName, item, schema, t]);
+
+    const handleCloseEntitySearchSheet = useCallback(() => {
+        setShowEntitySearchSheet(false);
+        setEntitySearchData(null);
+        setEntitySearchResults(null);
+    }, []);
+
+    if (unit == null) {
+        return <Navigate to={InternalRoutes.Dashboard.StorageUnit.path} />
+    }
+
+    if (!unit && !currentTableName) {
+        return <InternalPage routes={routes}>
+            <LoadingPage/>
+        </InternalPage>
+    }
+
+    if (isContentObject) {
+        return (
+            <InternalPage
+                routes={routes}
+                className="relative"
+                sidebar={<SchemaViewer parentRef={currentParentRef} selectedName={unit.Name} trail={browserTrail} />}
+            >
+                <div className="flex flex-col grow gap-lg h-[calc(100%-100px)]">
+                    <div className="flex items-center justify-between">
+                        <div className="flex gap-sm items-center">
+                            <h1 className="text-xl font-bold mr-4">{unitName}</h1>
+                        </div>
+                        {sourceContent?.MIMEType && (
+                            <div className="text-sm text-muted-foreground">{sourceContent.MIMEType}</div>
+                        )}
+                    </div>
+                    <StackList>
+                        {unit.Attributes.map(attribute => (
+                            <div key={attribute.Key} data-field-key={attribute.Key} data-field-value={attribute.Value?.toLowerCase()}>
+                                <StackListItem item={attribute.Key}>
+                                    {attribute.Value?.toLowerCase()}
+                                </StackListItem>
+                            </div>
+                        ))}
+                    </StackList>
+                    {sourceContentLoading ? (
+                        <div className="flex justify-center items-center grow">
+                            <Loading />
+                        </div>
+                    ) : sourceContent?.Text ? (
+                        sourceContentLanguage ? (
+                            <div className="grow min-h-[400px] border rounded-md overflow-hidden">
+                                <CodeEditor
+                                    language={sourceContentLanguage}
+                                    value={sourceContent.Text}
+                                    disabled={true}
+                                />
+                            </div>
+                        ) : (
+                            <div className="grow min-h-[400px] overflow-auto rounded-md border bg-background/40 p-4">
+                                <pre className="whitespace-pre-wrap break-words text-sm">{sourceContent.Text}</pre>
+                            </div>
+                        )
+                    ) : (
+                        <div className="grow rounded-md border bg-background/40" />
+                    )}
+                </div>
+            </InternalPage>
+        );
+    }
+
+    return <InternalPage routes={routes} className="relative" sidebar={<SchemaViewer parentRef={currentParentRef} selectedName={unit.Name} trail={browserTrail} />}>
+        <div className="flex flex-col grow gap-lg h-[calc(100%-100px)]">
+            <div className="flex items-center justify-between">
+                <div className="flex gap-sm items-center">
+                    <h1 className="text-xl font-bold mr-4">{unitName}</h1>
+                </div>
+                <div className="text-sm" data-testid="total-count-top"><span className="font-semibold">{t('totalCount')}</span> {totalCount}</div>
+            </div>
+            <div className="flex w-full relative" data-testid="explore-storage-unit-options">
+                <div className="flex justify-between items-end w-full">
+                    <div className="flex gap-2">
+                        {EESearchBar != null ? (
+                            <EESearchBar
+                                key={conditionKey}
+                                columns={whereColumns}
+                                columnTypes={whereColumnTypes ?? []}
+                                validOperators={validOperators}
+                                onConditionChange={setSearchCondition}
+                                onSubmit={handleQuery}
+                            />
+                        ) : (
+                            <div className="flex flex-col gap-2">
+                                <Label>{t('search')}</Label>
+                                <div className="relative">
+                                    <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                                    <Input
+                                        placeholder={t('searchPlaceholder')}
+                                        className="w-64 pl-10"
+                                        value={localSearch}
+                                        onChange={e => {
+                                            setLocalSearch(e.target.value);
+                                            searchRef.current(e.target.value);
+                                        }}
+                                        onKeyDown={e => {
+                                            if (e.key === "Enter" && localSearch) {
+                                                searchRef.current(localSearch);
+                                            }
+                                        }}
+                                        data-testid="table-search"
+                                    />
+                                </div>
+                            </div>
+                        )}
+                        <div className="flex flex-col gap-2">
+                            <Label>{t('pageSizeLabel')}</Label>
+                            <div className="flex gap-2">
+                                <Select
+                                    value={isCustomPageSize ? "custom" : pageSizeString}
+                                    onValueChange={handlePageSizeChange}
+                                >
+                                    <SelectTrigger className="w-32" data-testid="table-page-size">
+                                        <span>{isCustomPageSize ? t('custom') : `${t('showPrefix')} ${pageSizeString}`}</span>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {import.meta.env.VITE_E2E_TEST === "true" &&
+                                            <SelectItem value="1" data-value="1">1</SelectItem>
+                                        }
+                                        {import.meta.env.VITE_E2E_TEST === "true" &&
+                                            <SelectItem value="2" data-value="2">2</SelectItem>
+                                        }
+                                        <SelectItem value="10" data-value="10">10</SelectItem>
+                                        <SelectItem value="25" data-value="25">25</SelectItem>
+                                        <SelectItem value="50" data-value="50">50</SelectItem>
+                                        <SelectItem value="100" data-value="100">100</SelectItem>
+                                        <SelectItem value="250" data-value="250">250</SelectItem>
+                                        <SelectItem value="500" data-value="500">500</SelectItem>
+                                        <SelectItem value="1000" data-value="1000">1000</SelectItem>
+                                        <SelectItem value="custom" data-value="custom">Custom</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                {isCustomPageSize && (
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        className="w-24"
+                                        value={customPageSizeInput}
+                                        onChange={(e) => setCustomPageSizeInput(e.target.value)}
+                                        onBlur={handleCustomPageSizeApply}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                                handleCustomPageSizeApply();
+                                            }
+                                        }}
+                                        data-testid="table-page-size-custom"
+                                    />
+                                )}
+                            </div>
+                        </div>
+                        {isTabularObject && (
+                            whereConditionMode === 'sheet' ? (
+                                <ExploreStorageUnitWhereConditionSheet
+                                    defaultWhere={whereCondition}
+                                    columns={whereColumns}
+                                    operators={validOperators}
+                                    onChange={handleFilterChange}
+                                    columnTypes={whereColumnTypes ?? []}
+                                />
+                            ) : (
+                                <ExploreStorageUnitWhereCondition
+                                    defaultWhere={whereCondition}
+                                    columns={whereColumns}
+                                    operators={validOperators}
+                                    onChange={handleFilterChange}
+                                    columnTypes={whereColumnTypes ?? []}
+                                />
+                            )
+                        )}
+                        <Button className="ml-6 mt-[22px]" onClick={handleQuery} data-testid="submit-button">
+                            <CheckCircleIcon className="w-4 h-4" /> {t('query')}
+                        </Button>
+                    </div>
+                    <Button onClick={handleOpenScratchpad} data-testid="embedded-scratchpad-button" variant="secondary"
+                        className={cn({
+                            "hidden": !supportsScratchpad,
+                        })}>
+                        <CommandLineIcon className="w-4 h-4" /> {t('scratchpad')}
+                    </Button>
+                </div>
+                <Sheet open={showAdd} onOpenChange={setShowAdd}>
+                    <SheetContent
+                        side="right"
+                        className="flex flex-col p-8"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setShowAdd(false);
+                            }
+                        }}
+                    >
+                        <SheetTitle className="flex items-center gap-2"><TableCellsIcon className="w-5 h-5" /> {t('addRowTitle')}</SheetTitle>
+                        <div className="flex-1 overflow-y-auto pr-2">
+                            {/* NoSQL Document input - show JSON editor */}
+                            {isNoSQL && rows?.Columns?.length === 1 && rows?.Columns?.[0]?.Type === "Document" ? (
+                                <div className="flex flex-col gap-4" data-testid="add-row-field-document">
+                                    <Label>{t('documentJson')}</Label>
+                                    <p className="text-xs text-muted-foreground">{t('documentJsonHelp')}</p>
+                                    <div className="h-[300px] border rounded-md overflow-hidden">
+                                        <CodeEditor
+                                            language="json"
+                                            value={addRowData.document ?? "{\n  \n}"}
+                                            setValue={(value) => handleAddRowFieldChange("document", value)}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                /* Regular column-based input for SQL databases */
+                                <div className="flex flex-col gap-4">
+                                    {rows?.Columns?.map((col, index) => (
+                                        <div key={col.Name} className="flex flex-col gap-2"
+                                             data-testid={`add-row-field-${col.Name}`}>
+                                            <Tip>
+                                                <div className="flex items-center gap-xs">
+                                                    {columnIcons[index]}
+                                                    <Label className="w-fit">
+                                                        {col.Name}
+                                                    </Label>
+                                                </div>
+                                                <p className="text-xs">{col.Type?.toLowerCase()}</p>
+                                            </Tip>
+                                            <Input
+                                                value={addRowData[col.Name] ?? ""}
+                                                onChange={e => handleAddRowFieldChange(col.Name, e.target.value)}
+                                                placeholder={`Enter value for ${col.Name}`}
+                                                {...getInputPropsForColumnType(col.Type || '')}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {addRowError && (
+                                <ErrorState error={addRowError} />
+                            )}
+                        </div>
+                        <SheetFooter className="flex flex-row gap-sm px-0 pt-4 border-t">
+                            <Button
+                                className="flex-1"
+                                variant="secondary"
+                                onClick={() => setShowAdd(false)}
+                                data-testid="cancel-add-row"
+                            >
+                                {t('cancel')}
+                            </Button>
+                            <Button className="flex-1" onClick={handleAddRowSubmit} data-testid="submit-add-row-button" disabled={adding}>
+                                <CheckCircleIcon className="w-4 h-4" /> {t('submit')}
+                            </Button>
+                        </SheetFooter>
+                    </SheetContent>
+                </Sheet>
+
+            </div>
+            <div className="grow" ref={tableContainerRef}>
+                {loading ? (
+                    <div className="flex justify-center items-center h-full">
+                        <Loading />
+                    </div>
+                ) : rows != null ? (
+                    <StorageUnitTable
+                        columns={columns}
+                        rows={rows.Rows}
+                        onRowUpdate={handleRowUpdate}
+                        columnTypes={columnTypes}
+                        columnIsPrimary={columnIsPrimary}
+                        columnIsForeignKey={columnIsForeignKey}
+                        schema={schema}
+                        storageUnit={unitName}
+                        objectRef={currentUnitRef}
+                        onRefresh={handleSubmitRequest}
+                        onColumnSort={handleColumnSort}
+                        sortedColumns={sortedColumnsMap}
+                        searchRef={searchRef}
+                        pageSize={pageSize}
+                        height={tableHeight}
+                        // Server-side pagination props
+                        totalCount={Number.parseInt(totalCount, 10)}
+                        currentPage={currentPage}
+                        onPageChange={handlePageChange}
+                        showPagination={true}
+                        // Foreign key functionality
+                        isValidForeignKey={isValidForeignKey}
+                        onEntitySearch={handleEntitySearch}
+                        databaseType={current?.Type}
+                        allowRowUpdate={allowsUpdateData}
+                        allowRowDelete={allowsDeleteData}
+                        // Mock data control - disabled for views/materialized views
+                        isMockDataGenerationAllowed={isMockDataGenerationAllowed}
+                        // Import control - enabled for explore view
+                        allowImport={true}
+                        enableKeyboardShortcuts={true}
+                    >
+                        {allowsInsertData && <div className="flex gap-2">
+                            <Button onClick={handleOpenAddSheet} disabled={adding} data-testid="add-row-button">
+                                <PlusCircleIcon className="w-4 h-4" /> {t('addRowButton')}
+                            </Button>
+                        </div>}
+                    </StorageUnitTable>
+                ) : null}
+            </div>
+        </div>
+        <Drawer open={isScratchpadOpen} onOpenChange={setIsScratchpadOpen} modal>
+            <DrawerContent className="px-8 min-h-[65vh] max-h-[80vh] overflow-hidden flex flex-col" data-testid="scratchpad-drawer">
+                <Tip className="w-fit absolute top-0 right-0">
+                    <Button variant="ghost" onClick={handleCloseScratchpad} data-testid="icon-button" aria-label={t('close')}>
+                        <XMarkIcon className="w-4 h-4" />
+                    </Button>
+                    <p>{t('close')}</p>
+                </Tip>
+                <DrawerHeader className="px-0">
+                    <DrawerTitle className="flex justify-between items-center">
+                        <h2 className="text-lg font-semibold">{t('scratchpad')}</h2>
+                        <div className="flex gap-sm items-center">
+                            <Button onClick={() => handleScratchpad()} data-testid="run-submit-button">
+                                <PlayIcon className="w-4 h-4" />
+                                {t('run')}
+                            </Button>
+                        </div>
+                    </DrawerTitle>
+                </DrawerHeader>
+                <div className="flex flex-col gap-sm h-[150px] mb-4" data-vaul-no-drag>
+                    <CodeEditor language="sql" value={code} setValue={setCode} onRun={handleScratchpad} />
+                </div>
+                <div className="overflow-y-auto" data-vaul-no-drag ref={scratchpadResultsRef}>
+                    {rawExecuteError != null && (
+                        <div className="flex items-center justify-between mt-4">
+                            <ErrorState error={rawExecuteError} />
+                        </div>
+                    )}
+                    {rawExecuteData != null && (
+                        !isDestructiveQuery(code) || rawExecuteData.RawExecute.Rows.length > 0 ? (
+                            <StorageUnitTable
+                                key={scratchpadContainerWidth}
+                                columns={rawExecuteData.RawExecute.Columns.map(c => c.Name)}
+                                columnTypes={rawExecuteData.RawExecute.Columns.map(c => c.Type)}
+                                rows={rawExecuteData.RawExecute.Rows}
+                                disableEdit={true}
+                                limitContextMenu={true}
+                                schema={schema}
+                                storageUnit={unitName}
+                                onRefresh={handleSubmitRequest}
+                                showPagination={false}
+                                databaseType={current?.Type}
+                                totalCount={Number.parseInt(totalCount, 10)}
+                            />
+                        ) : (
+                            <div className="bg-white/10 text-neutral-800 dark:text-neutral-300 rounded-lg p-2 flex gap-sm self-start items-center my-4">
+                                Action Executed
+                                <CheckCircleIcon className="w-4 h-4" />
+                            </div>
+                        )
+                    )}
+                </div>
+                <AlertDialog open={pendingScratchpadQuery != null} onOpenChange={(open) => { if (!open) setPendingScratchpadQuery(null); }}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>{t('confirmOperationTitle')}</AlertDialogTitle>
+                            <AlertDialogDescription>{t('confirmOperationDescription')}</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel data-testid="execute-query-cancel" onClick={() => setPendingScratchpadQuery(null)}>{t('cancel')}</AlertDialogCancel>
+                            <AlertDialogAction asChild>
+                                <Button variant="destructive" data-testid="execute-query-confirm" onClick={() => {
+                                    if (pendingScratchpadQuery != null) {
+                                        doScratchpadExecute(pendingScratchpadQuery);
+                                        setPendingScratchpadQuery(null);
+                                    }
+                                }}>
+                                    {t('run')}
+                                </Button>
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+            </DrawerContent>
+        </Drawer>
+        <Sheet open={showEntitySearchSheet} onOpenChange={setShowEntitySearchSheet}>
+            <SheetContent side="right" className="flex flex-col p-8 min-w-[600px]">
+                <div className="text-lg font-semibold mb-4 flex items-center gap-2">
+                    <MagnifyingGlassIcon className="w-5 h-5" />
+                    {t('searchAround')}
+                </div>
+                {entitySearchData && (
+                    <div className="text-sm text-gray-500">
+                        {t('entitySearchQuery', { table: entitySearchData.targetTable, id: entitySearchData.value })}
+                    </div>
+                )}
+                <div className="flex-1 overflow-y-auto pr-2">
+                    {entitySearchResults && entitySearchResults.Rows.length > 0 ? (
+                        <div className="flex flex-col gap-4">
+                            <StackList>
+                                {entitySearchData && (
+                                    <StackListItem key="entity-id" item="ID">
+                                        {entitySearchData.value}
+                                    </StackListItem>
+                                )}
+                                {entitySearchResults.Columns.map((column, index) => (
+                                    <StackListItem
+                                        key={column.Name}
+                                        item={
+                                            isValidForeignKey(column.Name) ? (
+                                                <Badge className="text-lg" data-testid="foreign-key-attribute">
+                                                    {column.Name}
+                                                </Badge>
+                                            ) : column.Name
+                                        }
+                                    >
+                                        {entitySearchResults.Rows[0][index]}
+                                    </StackListItem>
+                                ))}
+                            </StackList>
+                        </div>
+                    ) : (
+                        <div className="text-center text-gray-500 py-8">
+                            {t('noEntityFound')}
+                        </div>
+                    )}
+                </div>
+                <SheetFooter>
+                    <Button onClick={handleCloseEntitySearchSheet} variant="outline">
+                        {t('close')}
+                    </Button>
+                </SheetFooter>
+            </SheetContent>
+        </Sheet>
+    </InternalPage>
+}

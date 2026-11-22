@@ -1,0 +1,74 @@
+import { TourConfig } from '../components/tour/tour-step';
+import {
+    ChatBubbleLeftRightIcon,
+    CodeBracketIcon,
+    ShareIcon,
+    SparklesIcon,
+    TableCellsIcon,
+    AdjustmentsHorizontalIcon,
+    ArrowDownTrayIcon,
+} from '../components/heroicons';
+import { InternalRoutes } from './routes';
+import { withBasePath } from '../utils/base-path';
+
+export const sampleDatabaseTour: TourConfig = {
+    id: 'sample-database-tour',
+    steps: [
+        {
+            target: '#whodb-app-container',
+            title: 'Welcome to WhoDB',
+            description: 'Let\'s take a quick tour to show you how to make the most of WhoDB with our sample database. This will only take a minute!',
+            icon: <SparklesIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'center',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+        {
+            target: `[href="${withBasePath(InternalRoutes.Chat.path)}"]`,
+            title: 'AI Chat Assistant',
+            description: 'Ask questions in plain English like "Show me all customers" or "What are the top products?". The AI will generate and run SQL queries for you.',
+            icon: <ChatBubbleLeftRightIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'right',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+        {
+            target: `[href="${withBasePath(InternalRoutes.Graph.path)}"]`,
+            title: 'Visual Schema Explorer',
+            description: 'See your entire database structure at a glance. Interactive graph shows all tables, columns, and relationships with zoom and pan controls.',
+            icon: <ShareIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'right',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+        {
+            target: '[data-testid="storage-unit-card-list"]',
+            title: 'Browse Database Tables',
+            description: 'Here are all the tables in your database. Click on any table card to view and edit its data in a spreadsheet-like grid. You can sort, filter, and modify data with ease.',
+            icon: <TableCellsIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'bottom',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+        {
+            target: `[href="${withBasePath(InternalRoutes.RawExecute.path)}"]`,
+            title: 'SQL Editor & Scratchpad',
+            description: 'Write custom SQL queries with syntax highlighting and auto-completion. All your queries are automatically saved in history.',
+            icon: <CodeBracketIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'right',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+        {
+            target: '[data-testid="data-button"]',
+            title: 'View Table Data',
+            description: 'Click the "Data" button on any table card to open it in the data grid. From there, you can filter records, export data, and edit cells directly like a spreadsheet.',
+            icon: <AdjustmentsHorizontalIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'left',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+        {
+            target: '#whodb-app-container',
+            title: 'You\'re All Set!',
+            description: 'You now know the key features of WhoDB. Start exploring the sample database or connect your own database from the sidebar. Happy exploring!',
+            icon: <SparklesIcon className="w-6 h-6 text-brand-foreground" />,
+            position: 'center',
+            path: InternalRoutes.Dashboard.StorageUnit.path,
+        },
+    ],
+};

@@ -1,0 +1,595 @@
+package tui
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/clidey/whodb/cli/internal/sourcetypes"
+	"github.com/clidey/whodb/cli/pkg/styles"
+	"github.com/clidey/whodb/core/src/engine"
+	"github.com/sahilm/fuzzy"
+)
+type BrowserView struct {
+	parent              *MainModel
+	tables              []engine.StorageUnit
+	selectedIndex       int
+	selectedTable       string
+	currentSchema       string
+	schemas             []string
+	selectedSchemaIndex int
+	schemaSelecting     bool
+	loading             bool
+	err                 error
+	width               int
+	height              int
+	columnsPerRow       int
+	filterInput         textinput.Model
+	filtering           bool
+	filteredTables      []engine.StorageUnit
+	retryPrompt         RetryPrompt
+	lastRefreshed       time.Time
+	compact             bool
+	escConfirm          bool
+}
+func NewBrowserView(parent *MainModel) *BrowserView {
+	ti := textinput.New()
+	ti.Placeholder = "Search Tables"
+	ti.CharLimit = 50
+	ti.Width = 30
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(styles.Primary)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(styles.Foreground)
+	ti.Cursor.Style = lipgloss.NewStyle().Foreground(styles.Primary)
+	return &BrowserView{
+		parent:        parent,
+		loading:       true,
+		selectedIndex: 0,
+		columnsPerRow: 4,
+		width:         80,
+		height:        20,
+		filterInput:   ti,
+		filtering:     false,
+	}
+}
+func (v *BrowserView) Update(msg tea.Msg) (*BrowserView, tea.Cmd) {
+	switch msg := msg.(type) {
+	case escConfirmTimeoutMsg:
+		v.escConfirm = false
+		return v, nil
+	case tablesLoadedMsg:
+		v.loading = false
+		if msg.err != nil {
+			if strings.Contains(msg.err.Error(), "timed out") {
+				preferred := v.parent.config.GetPreferredTimeout()
+				if preferred > 0 && !v.retryPrompt.AutoRetried() {
+					v.retryPrompt.SetAutoRetried(true)
+					v.loading = true
+					return v, v.loadTablesWithTimeout(time.Duration(preferred) * time.Second)
+				}
+				v.err = msg.err
+				v.retryPrompt.Show("")
+				return v, nil
+			}
+			v.err = msg.err
+			return v, nil
+		}
+		v.tables = msg.tables
+		v.schemas = msg.schemas
+		v.currentSchema = msg.schema
+		v.lastRefreshed = time.Now()
+		v.applyFilter()
+		v.selectedIndex = 0
+		if v.selectedTable != "" {
+			for i, table := range v.filteredTables {
+				if table.Name == v.selectedTable {
+					v.selectedIndex = i
+					break
+				}
+			}
+		}
+		for i, s := range v.schemas {
+			if s == v.currentSchema {
+				v.selectedSchemaIndex = i
+				break
+			}
+		}
+		return v, nil
+	case tea.WindowSizeMsg:
+		v.width = msg.Width
+		v.height = msg.Height
+		columnWidth := 25
+		available := msg.Width - 8
+		v.columnsPerRow = clamp(available/columnWidth, 1, 6)
+		v.filterInput.Width = clamp(msg.Width-20, 15, 50)
+		return v, nil
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if v.selectedIndex >= v.columnsPerRow {
+				v.selectedIndex -= v.columnsPerRow
+			}
+			return v, nil
+		case tea.MouseButtonWheelDown:
+			if v.selectedIndex+v.columnsPerRow < len(v.filteredTables) {
+				v.selectedIndex += v.columnsPerRow
+			}
+			return v, nil
+		case tea.MouseButtonLeft:
+			if !v.loading && !v.retryPrompt.IsActive() && len(v.filteredTables) > 0 {
+				headerLines := 4
+				if len(v.schemas) > 0 {
+					headerLines++
+				}
+				if v.filtering || v.filterInput.Value() != "" {
+					headerLines++
+				}
+				gridRow := msg.Y - headerLines
+				gridCol := msg.X / 25
+				if gridRow >= 0 && gridCol >= 0 && gridCol < v.columnsPerRow {
+					idx := gridRow*v.columnsPerRow + gridCol
+					if idx >= 0 && idx < len(v.filteredTables) {
+						v.selectedIndex = idx
+					}
+				}
+			}
+			return v, nil
+		}
+	case tea.KeyMsg:
+		if v.escConfirm && !key.Matches(msg, Keys.Browser.Disconnect) {
+			v.escConfirm = false
+		}
+		if v.retryPrompt.IsActive() {
+			result, handled := v.retryPrompt.HandleKeyMsg(msg.String())
+			if handled {
+				if result != nil {
+					v.err = nil
+					v.loading = true
+					if result.Save {
+						v.parent.config.SetPreferredTimeout(int(result.Timeout.Seconds()))
+						return v, tea.Batch(v.parent.requestConfigSave(), v.loadTablesWithTimeout(result.Timeout))
+					}
+					return v, v.loadTablesWithTimeout(result.Timeout)
+				}
+				return v, nil
+			}
+		}
+		if v.filtering {
+			switch msg.String() {
+			case "esc":
+				v.filtering = false
+				v.filterInput.Blur()
+				v.filterInput.SetValue("")
+				v.applyFilter()
+				return v, nil
+			case "enter":
+				v.filtering = false
+				v.filterInput.Blur()
+				v.applyFilter()
+				return v, nil
+			default:
+				var cmd tea.Cmd
+				v.filterInput, cmd = v.filterInput.Update(msg)
+				v.applyFilter()
+				return v, cmd
+			}
+		}
+		if v.schemaSelecting {
+			switch msg.String() {
+			case "esc":
+				v.schemaSelecting = false
+				return v, nil
+			case "left", "up", "h", "k":
+				if v.selectedSchemaIndex > 0 {
+					v.selectedSchemaIndex--
+				}
+				return v, nil
+			case "right", "down", "l", "j":
+				if v.selectedSchemaIndex < len(v.schemas)-1 {
+					v.selectedSchemaIndex++
+				}
+				return v, nil
+			case "enter":
+				if v.selectedSchemaIndex >= 0 && v.selectedSchemaIndex < len(v.schemas) {
+					v.currentSchema = v.schemas[v.selectedSchemaIndex]
+					v.schemaSelecting = false
+					v.loading = true
+					v.err = nil
+					return v, v.loadTables()
+				}
+				return v, nil
+			default:
+				return v, nil
+			}
+		}
+		switch {
+		case key.Matches(msg, Keys.Browser.Select):
+			if v.selectedIndex >= 0 && v.selectedIndex < len(v.filteredTables) {
+				table := v.filteredTables[v.selectedIndex]
+				v.selectedTable = table.Name
+				cmd := v.parent.resultsView.LoadTable(v.currentSchema, table.Name)
+				v.parent.PushView(ViewResults)
+				return v, cmd
+			}
+		case key.Matches(msg, Keys.Browser.Up):
+			if v.selectedIndex >= v.columnsPerRow {
+				v.selectedIndex -= v.columnsPerRow
+			}
+			return v, nil
+		case key.Matches(msg, Keys.Browser.Down):
+			if v.selectedIndex+v.columnsPerRow < len(v.filteredTables) {
+				v.selectedIndex += v.columnsPerRow
+			}
+			return v, nil
+		case key.Matches(msg, Keys.Browser.Left):
+			if v.selectedIndex > 0 {
+				v.selectedIndex--
+			}
+			return v, nil
+		case key.Matches(msg, Keys.Browser.Right):
+			if v.selectedIndex < len(v.filteredTables)-1 {
+				v.selectedIndex++
+			}
+			return v, nil
+		case key.Matches(msg, Keys.Browser.Filter):
+			v.filtering = true
+			v.filterInput.Focus()
+			return v, nil
+		case key.Matches(msg, Keys.Browser.Schema):
+			if len(v.schemas) > 1 {
+				v.schemaSelecting = true
+			}
+			return v, nil
+		case key.Matches(msg, Keys.Browser.Refresh):
+			v.loading = true
+			v.err = nil
+			v.filterInput.SetValue("")
+			v.filtering = false
+			return v, v.loadTables()
+		case key.Matches(msg, Keys.Browser.Editor):
+			v.parent.PushView(ViewEditor)
+			return v, nil
+		case key.Matches(msg, Keys.Browser.History):
+			v.parent.PushView(ViewHistory)
+			return v, nil
+		case key.Matches(msg, Keys.Browser.AIChat):
+			v.parent.PushView(ViewChat)
+			return v, v.parent.chatView.Init()
+		case key.Matches(msg, Keys.Browser.Disconnect):
+			if v.parent.dbManager.GetCurrentConnection() != nil {
+				if v.escConfirm {
+					v.escConfirm = false
+					v.parent.mode = ViewConnection
+					v.parent.dbManager.Disconnect()
+					v.parent.activeLayout = ""
+					v.parent.layoutRoot = nil
+					v.parent.viewHistory = nil
+					v.parent.connectionView.connecting = false
+					v.parent.connectionView.connError = nil
+					v.parent.connectionView.refreshList()
+					return v, tea.Batch(v.parent.connectionView.pingAllConnections(), v.parent.connectionView.loadDockerConnections())
+				}
+				v.escConfirm = true
+				return v, tea.Batch(
+					v.parent.SetStatus("Press Esc again to disconnect"),
+					tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+						return escConfirmTimeoutMsg{}
+					}),
+				)
+			}
+			return v, nil
+		}
+	}
+	return v, nil
+}
+func (v *BrowserView) View() string {
+	conn := v.parent.dbManager.GetCurrentConnection()
+	if conn == nil {
+		return "No connection"
+	}
+	var b strings.Builder
+	var title string
+	isFileDB := sourcetypes.IsFileTransport(conn.Type) && conn.Database != ""
+	if conn.Name != "" {
+		if isFileDB {
+			title = fmt.Sprintf("Connected to: %s (%s)", conn.Name, conn.Database)
+		} else {
+			title = fmt.Sprintf("Connected to: %s (%s@%s/%s)", conn.Name, conn.Type, conn.Host, conn.Database)
+		}
+	} else {
+		if isFileDB {
+			title = fmt.Sprintf("Connected to: %s", conn.Database)
+		} else {
+			title = fmt.Sprintf("Connected to: %s@%s/%s", conn.Type, conn.Host, conn.Database)
+		}
+	}
+	if v.width > 4 && lipgloss.Width(title) > v.width-4 {
+		runes := []rune(title)
+		maxW := v.width - 7
+		for lipgloss.Width(string(runes)) > maxW && len(runes) > 0 {
+			runes = runes[:len(runes)-1]
+		}
+		title = string(runes) + "..."
+	}
+	b.WriteString(styles.RenderTitle(title))
+	b.WriteString("\n")
+	if len(v.schemas) > 0 {
+		schemaLabel := "Schema: "
+		if v.schemaSelecting {
+			schemaLabel = styles.RenderKey("▶ Schema: ")
+		} else {
+			schemaLabel = "  Schema: "
+		}
+		b.WriteString(schemaLabel)
+		if v.schemaSelecting {
+			for i, schema := range v.schemas {
+				if i == v.selectedSchemaIndex {
+					b.WriteString(styles.ActiveListItemStyle.Render(fmt.Sprintf(" %s ", schema)))
+				} else {
+					b.WriteString(styles.RenderMuted(fmt.Sprintf(" %s ", schema)))
+				}
+				if i < len(v.schemas)-1 {
+					b.WriteString(" ")
+				}
+			}
+		} else {
+			b.WriteString(styles.ActiveListItemStyle.Render(fmt.Sprintf(" %s ", v.currentSchema)))
+			if len(v.schemas) > 1 {
+				b.WriteString(styles.RenderMuted(fmt.Sprintf(" +%d more", len(v.schemas)-1)))
+			}
+		}
+		b.WriteString("\n")
+	}
+	if v.filtering || v.filterInput.Value() != "" {
+		filterLabel := "Filter: "
+		if v.filtering {
+			filterLabel = styles.RenderKey("Filter: ")
+		} else {
+			filterLabel = styles.RenderMuted("Filter: ")
+		}
+		b.WriteString(filterLabel)
+		b.WriteString(v.filterInput.View())
+		if !v.filtering && v.filterInput.Value() != "" {
+			b.WriteString(" ")
+			b.WriteString(styles.RenderMuted(fmt.Sprintf("(%d/%d)", len(v.filteredTables), len(v.tables))))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	if v.retryPrompt.IsActive() {
+		b.WriteString(v.retryPrompt.View())
+		return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+	}
+	if v.err != nil {
+		b.WriteString(styles.RenderErrorBox(v.err.Error()))
+		b.WriteString("\n\n")
+		b.WriteString(styles.RenderMuted("Press " + Keys.Browser.Refresh.Help().Key + " to retry"))
+	} else if v.loading {
+		b.WriteString(v.parent.SpinnerView() + styles.RenderMuted(" Loading tables..."))
+	} else if len(v.filteredTables) == 0 {
+		b.WriteString(styles.RenderMuted("No tables found in this database."))
+		b.WriteString("\n")
+		b.WriteString(styles.RenderMuted("Press " + Keys.Browser.Refresh.Help().Key + " to refresh or " + Keys.Browser.Editor.Help().Key + " to run SQL queries."))
+	} else {
+		b.WriteString(v.renderTablesGrid())
+	}
+	if !v.compact {
+		b.WriteString("\n\n")
+		if v.schemaSelecting {
+			b.WriteString(RenderBindingHelpWidth(v.width,
+				Keys.SchemaSelect.NavLeft,
+				Keys.SchemaSelect.SelectSchema,
+				Keys.Global.Back,
+			))
+		} else if v.filtering {
+			b.WriteString(renderBindingHelpWidthNoHelp(v.width,
+				Keys.Filter.CancelFilter,
+				Keys.Filter.ApplyFilter,
+			))
+		} else {
+			bindings := []key.Binding{
+				Keys.Browser.Up,
+				Keys.Browser.Down,
+				Keys.Browser.Left,
+				Keys.Browser.Right,
+				Keys.Browser.Select,
+				Keys.Browser.Filter,
+			}
+			if len(v.schemas) > 1 {
+				bindings = append(bindings, Keys.Browser.Schema)
+			}
+			bindings = append(bindings,
+				Keys.Browser.Editor,
+				Keys.Browser.AIChat,
+				Keys.Browser.History,
+				Keys.Global.SchemaDiff,
+				Keys.Global.ERDiagram,
+				Keys.Global.MockData,
+				Keys.Browser.Refresh,
+				Keys.Global.NextView,
+				Keys.Browser.Disconnect,
+				Keys.Global.Quit,
+			)
+			b.WriteString(RenderBindingHelpWidth(v.width, bindings...))
+		}
+	}
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
+func (v *BrowserView) renderTablesGrid() string {
+	var b strings.Builder
+	columnWidth := 25
+	tables := v.filteredTables
+	for i := 0; i < len(tables); i++ {
+		colIndex := i % v.columnsPerRow
+		if colIndex == 0 && i > 0 {
+			b.WriteString("\n")
+		}
+		table := tables[i]
+		tableName := table.Name
+		if lipgloss.Width(tableName) > columnWidth-3 {
+			runes := []rune(tableName)
+			for lipgloss.Width(string(runes)) > columnWidth-6 {
+				runes = runes[:len(runes)-1]
+			}
+			tableName = string(runes) + "..."
+		}
+		padding := columnWidth - lipgloss.Width(tableName)
+		if padding < 0 {
+			padding = 0
+		}
+		content := tableName + strings.Repeat(" ", padding)
+		if i == v.selectedIndex {
+			b.WriteString(styles.ActiveListItemStyle.Render(content))
+		} else {
+			b.WriteString(styles.ListItemStyle.Render(content))
+		}
+	}
+	b.WriteString("\n\n")
+	footer := fmt.Sprintf("Total: %d tables", len(tables))
+	if !v.lastRefreshed.IsZero() {
+		ago := time.Since(v.lastRefreshed)
+		if ago < 5*time.Minute {
+			footer += fmt.Sprintf(" • Refreshed: %ds ago", int(ago.Seconds()))
+		} else {
+			footer += fmt.Sprintf(" • Refreshed: %dm ago", int(ago.Minutes()))
+		}
+	}
+	b.WriteString(styles.RenderMuted(footer))
+	return b.String()
+}
+func (v *BrowserView) loadTables() tea.Cmd {
+	return v.loadTablesWithTimeout(v.parent.config.GetQueryTimeout())
+}
+func (v *BrowserView) loadTablesWithTimeout(timeout time.Duration) tea.Cmd {
+	currentSchema := v.currentSchema
+	conn := v.parent.dbManager.GetCurrentConnection()
+	return func() tea.Msg {
+		if conn == nil {
+			return tablesLoadedMsg{
+				tables:  []engine.StorageUnit{},
+				schemas: []string{},
+				schema:  "",
+				err:     fmt.Errorf("no connection"),
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		schemas, err := v.parent.dbManager.GetSchemasWithContext(ctx)
+		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return tablesLoadedMsg{
+					tables:  []engine.StorageUnit{},
+					schemas: []string{},
+					schema:  currentSchema,
+					err:     fmt.Errorf("timed out fetching schemas"),
+				}
+			}
+			schemas = []string{}
+		}
+		schema := currentSchema
+		if schema == "" {
+			if conn.Schema != "" {
+				schemaExists := false
+				for _, s := range schemas {
+					if s == conn.Schema {
+						schemaExists = true
+						schema = conn.Schema
+						break
+					}
+				}
+				if !schemaExists {
+					schema = selectBestSchema(schemas)
+				}
+			} else {
+				schema = selectBestSchema(schemas)
+			}
+		}
+		schemaExists := false
+		for _, s := range schemas {
+			if s == schema {
+				schemaExists = true
+				break
+			}
+		}
+		if !schemaExists && len(schemas) > 0 {
+			schema = selectBestSchema(schemas)
+		}
+		units, err := v.parent.dbManager.GetStorageUnitsWithContext(ctx, schema)
+		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return tablesLoadedMsg{
+					tables:  []engine.StorageUnit{},
+					schemas: schemas,
+					schema:  schema,
+					err:     fmt.Errorf("timed out fetching tables"),
+				}
+			}
+			return tablesLoadedMsg{
+				tables:  []engine.StorageUnit{},
+				schemas: schemas,
+				schema:  schema,
+				err:     fmt.Errorf("failed to get tables: %w", err),
+			}
+		}
+		return tablesLoadedMsg{
+			tables:  units,
+			schemas: schemas,
+			schema:  schema,
+			err:     nil,
+		}
+	}
+}
+func (v *BrowserView) Init() tea.Cmd {
+	v.retryPrompt.SetAutoRetried(false)
+	return v.loadTables()
+}
+func (v *BrowserView) applyFilter() {
+	filterText := v.filterInput.Value()
+	if filterText == "" {
+		v.filteredTables = v.tables
+		return
+	}
+	names := make([]string, len(v.tables))
+	for i, t := range v.tables {
+		names[i] = t.Name
+	}
+	matches := fuzzy.Find(filterText, names)
+	v.filteredTables = make([]engine.StorageUnit, len(matches))
+	for i, m := range matches {
+		v.filteredTables[i] = v.tables[m.Index]
+	}
+	if v.selectedIndex >= len(v.filteredTables) {
+		v.selectedIndex = 0
+	}
+}
+func selectBestSchema(schemas []string) string {
+	if len(schemas) == 0 {
+		return ""
+	}
+	systemSchemas := map[string]bool{
+		"information_schema": true,
+		"pg_catalog":         true,
+		"pg_toast":           true,
+		"mysql":              true,
+		"sys":                true,
+		"performance_schema": true,
+	}
+	userSchemas := []string{}
+	for _, s := range schemas {
+		if !systemSchemas[s] && !strings.HasPrefix(s, "pg_temp_") && !strings.HasPrefix(s, "pg_toast_temp_") {
+			userSchemas = append(userSchemas, s)
+		}
+	}
+	if len(userSchemas) == 0 {
+		return schemas[0]
+	}
+	for _, s := range userSchemas {
+		if s == "public" {
+			return s
+		}
+	}
+	return userSchemas[0]
+}

@@ -1,0 +1,7 @@
+mutation ImportTableFile($input: ImportFileInput!) {
+  ImportTableFile: ImportSourceObjectFile(input: $input) {
+    Status
+    Message
+    Detail
+  }
+}

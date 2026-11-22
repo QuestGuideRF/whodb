@@ -1,0 +1,214 @@
+import {
+    Button,
+    Label,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+    Sheet,
+    SheetContent,
+    SheetFooter,
+    SheetTitle,
+    toast
+} from "@clidey/ux";
+import type { SourceObjectRefInput } from "@graphql";
+import {FC, useCallback, useEffect, useMemo, useState} from "react";
+import {useExportToCSV} from "./hooks";
+import {ShareIcon} from "./heroicons";
+import {VisuallyHidden} from "@radix-ui/react-visually-hidden";
+import {useTranslation} from "@/hooks/use-translation";
+import {useSourceContract} from "@/hooks/useSourceContract";
+
+interface IExportProps {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    storageUnit: string;
+    objectRef?: SourceObjectRefInput;
+    hasSelectedRows: boolean;
+    selectedRowsData?: Record<string, any>[];
+    checkedRowsCount: number;
+    databaseType?: string;
+    rawQuery?: string;
+    preselectedFormat?: 'csv' | 'excel' | 'ndjson';
+    forceExportAll?: boolean;
+}
+
+export const Export: FC<IExportProps> = ({
+                                             open,
+                                             onOpenChange,
+                                             storageUnit,
+                                             objectRef,
+                                             hasSelectedRows,
+                                             selectedRowsData,
+                                             checkedRowsCount,
+                                             databaseType,
+                                             rawQuery,
+                                             preselectedFormat,
+                                             forceExportAll,
+                                         }) => {
+    const { t } = useTranslation('components/export');
+    const [exportDelimiter, setExportDelimiter] = useState(',');
+    const { isNoSQL } = useSourceContract(databaseType);
+    const defaultFormat = useMemo(() => isNoSQL ? 'ndjson' : 'csv', [isNoSQL]);
+    const [exportFormat, setExportFormat] = useState<'csv' | 'excel' | 'ndjson'>(defaultFormat);
+
+    useEffect(() => {
+        setExportFormat(preselectedFormat ?? defaultFormat);
+    }, [defaultFormat, preselectedFormat]);
+
+    const exportFormatOptions = useMemo(() => {
+        const options: {value: 'csv' | 'excel' | 'ndjson', label: string}[] = [
+            {value: 'csv', label: t('formatCsv')},
+            {value: 'excel', label: t('formatExcel')},
+        ];
+        if (isNoSQL) {
+            options.push({value: 'ndjson', label: t('formatJson')});
+        }
+        return options;
+    }, [isNoSQL, t]);
+
+    const exportDelimiterOptions = useMemo(() => [
+        {value: ',', label: t('delimiterComma')},
+        {value: ';', label: t('delimiterSemicolon')},
+        {value: '|', label: t('delimiterPipe')},
+    ] as const, [t]);
+
+    const effectiveHasSelectedRows = hasSelectedRows && !forceExportAll;
+
+    const selectedRowsForExport = useMemo(() => {
+        if (rawQuery && selectedRowsData) return selectedRowsData;
+        if (!effectiveHasSelectedRows || !selectedRowsData) return undefined;
+        return selectedRowsData;
+    }, [effectiveHasSelectedRows, selectedRowsData, rawQuery]);
+
+    const backendExport = useExportToCSV(
+        objectRef,
+        storageUnit || '',
+        effectiveHasSelectedRows || !!rawQuery,
+        exportDelimiter,
+        selectedRowsForExport,
+        exportFormat,
+    );
+
+    const handleExportConfirm = useCallback(async () => {
+        try {
+            await backendExport();
+            onOpenChange(false);
+        } catch (error: any) {
+            toast.error(error.message || t('exportFailed'));
+        }
+    }, [backendExport, onOpenChange, t]);
+
+    return (
+        <>
+            <Sheet open={open} onOpenChange={onOpenChange}>
+                <SheetContent side="right" className="max-w-md w-full p-8" data-testid="export-dialog">
+                    <SheetTitle className="flex items-center gap-2"><ShareIcon className="w-4 h-4" /> {t('exportData')}</SheetTitle>
+                    <VisuallyHidden>
+                        <SheetTitle>{t('exportData')}</SheetTitle>
+                    </VisuallyHidden>
+                    <div className="flex flex-col gap-lg grow">
+                        <div className="space-y-4 grow">
+                            <p>
+                                {effectiveHasSelectedRows
+                                    ? t('selectedRows', { count: checkedRowsCount })
+                                    : rawQuery ? t('allDataRawQuery') : t('allData')}
+                            </p>
+                            <div className="mb-4 flex flex-col gap-2">
+                                <Label>
+                                    {t('format')}
+                                </Label>
+                                <Select
+                                    value={exportFormat}
+                                    onValueChange={(value) => setExportFormat(value as 'csv' | 'excel' | 'ndjson')}
+                                >
+                                    <SelectTrigger className="w-full" data-testid="export-format-select">
+                                        <SelectValue>
+                                            {
+                                                exportFormatOptions.find(opt => opt.value === exportFormat)?.label
+                                            }
+                                        </SelectValue>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {exportFormatOptions.map(opt => (
+                                            <SelectItem key={opt.value} value={opt.value} data-value={opt.value}>
+                                                {opt.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                {exportFormat === 'csv' && (
+                                    <>
+                                        <Label>
+                                            {t('delimiter')}
+                                        </Label>
+                                        <Select
+                                            value={exportDelimiter}
+                                            onValueChange={(value) => setExportDelimiter(value)}
+                                        >
+                                            <SelectTrigger className="w-full" data-testid="export-delimiter-select">
+                                                <SelectValue>
+                                                    {
+                                                        exportDelimiterOptions.find(opt => opt.value === exportDelimiter)?.label
+                                                    }
+                                                </SelectValue>
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {exportDelimiterOptions.map(opt => (
+                                                    <SelectItem key={opt.value} value={opt.value} data-value={opt.value}>
+                                                        {opt.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-sm mt-2">{t('delimiterHelp')}</p>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                        <SheetFooter className="flex gap-sm px-0">
+                            <div className="text-xs text-muted-foreground mb-8">
+                                <p className="font-medium mb-1">{t('exportDetailsTitle')}</p>
+                                <ul className="list-disc list-inside space-y-1">
+                                    {exportFormat === 'csv' ? (
+                                        <>
+                                            <li><p className="inline-block">{t('csvHeaders')}</p></li>
+                                            <li><p className="inline-block">{t('utf8Encoding')}</p></li>
+                                            <li><p className="inline-block">{t('csvDelimiter')}</p></li>
+                                        </>
+                                    ) : exportFormat === 'excel' ? (
+                                        <>
+                                            <li><p className="inline-block">{t('excelFormat')}</p></li>
+                                            <li><p className="inline-block">{t('excelHeaders')}</p></li>
+                                            <li><p className="inline-block">{t('excelColumns')}</p></li>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <li><p className="inline-block">{t('jsonLineDelimited')}</p></li>
+                                            <li><p className="inline-block">{t('utf8Encoding')}</p></li>
+                                            <li><p className="inline-block">{t('jsonDetails')}</p></li>
+                                        </>
+                                    )}
+                                </ul>
+                            </div>
+                            <div className="flex flex-row gap-sm">
+                                <Button
+                                    className="flex-1"
+                                    variant="secondary"
+                                    onClick={() => onOpenChange(false)}
+                                    data-testid="cancel-export"
+                                >
+                                    {t('cancel')}
+                                </Button>
+                                <Button className="flex-1" onClick={handleExportConfirm} data-testid="export-confirm-button">
+                                    {t('export')}
+                                </Button>
+                            </div>
+                        </SheetFooter>
+                    </div>
+                </SheetContent>
+            </Sheet>
+        </>
+    );
+};

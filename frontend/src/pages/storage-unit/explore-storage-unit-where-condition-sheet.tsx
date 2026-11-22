@@ -1,0 +1,435 @@
+import {
+    Button,
+    cn,
+    Input,
+    Label,
+    Sheet,
+    SheetContent,
+    SheetFooter,
+    SheetTitle
+} from "@clidey/ux";
+import { SearchSelect } from "../../components/ux";
+import { AtomicWhereCondition, WhereCondition, WhereConditionType } from '@graphql';
+import React, { FC, useCallback, useEffect, useMemo, useState } from "react";
+import { AdjustmentsHorizontalIcon, ChevronDownIcon, PencilIcon, PlusCircleIcon, XCircleIcon } from "../../components/heroicons";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { ScratchpadActions } from "../../store/scratchpad";
+import { useTranslation } from "@/hooks/use-translation";
+
+type IExploreStorageUnitWhereConditionSheetProps = {
+    defaultWhere?: WhereCondition;
+    columns: string[];
+    operators: string[];
+    columnTypes: string[];
+    onChange?: (filters: WhereCondition) => void;
+}
+
+export const ExploreStorageUnitWhereConditionSheet: FC<IExploreStorageUnitWhereConditionSheetProps> = ({
+    defaultWhere,
+    columns,
+    columnTypes,
+    onChange,
+    operators
+}) => {
+    const dispatch = useAppDispatch();
+    const { pages } = useAppSelector(state => state.scratchpad);
+    const { t } = useTranslation('pages/where-condition');
+    const [filters, setFilters] = useState<WhereCondition>(defaultWhere ?? {
+        Type: WhereConditionType.And,
+        And: { Children: [] }
+    });
+    const [sheetOpen, setSheetOpen] = useState(false);
+    const [sheetFilters, setSheetFilters] = useState<AtomicWhereCondition[]>([{ColumnType: "string", Key: "", Operator: "", Value: ""}]);
+    const [editingIndex, setEditingIndex] = useState<number>(0);
+    const [editingExistingIndex, setEditingExistingIndex] = useState<number>(-1);
+    const [editingExistingFilter, setEditingExistingFilter] = useState<AtomicWhereCondition | null>(null);
+
+    const fieldsDropdownItems = useMemo(() => columns.map(column => ({ value: column, label: column })), [columns]);
+    const validOperators = useMemo(() => {
+        return operators.map(operator => ({ value: operator, label: operator }));
+    }, [operators]);
+
+    const handleOpenSheet = useCallback(() => {
+        setSheetFilters([{ ColumnType: "string", Key: "", Operator: "", Value: "" }]);
+        setEditingIndex(0);
+        setEditingExistingIndex(-1);
+        setEditingExistingFilter(null);
+        setSheetOpen(true);
+    }, []);
+
+    const handleSheetFieldChange = useCallback((index: number, field: keyof AtomicWhereCondition, value: string) => {
+        setSheetFilters(prev => {
+            const newFilters = [...prev];
+            if (field === 'Key') {
+                newFilters[index] = {
+                    ...newFilters[index],
+                    Key: value,
+                    ColumnType: columnTypes[columns.findIndex(col => col === value)]
+                };
+            } else {
+                newFilters[index] = {...newFilters[index], [field]: value};
+            }
+            return newFilters;
+        });
+    }, [columnTypes, columns]);
+
+    const handleSheetAddFilter = useCallback(() => {
+        setSheetFilters(prev => [...prev, {ColumnType: "string", Key: "", Operator: "", Value: ""}]);
+        setEditingIndex(sheetFilters.length);
+    }, [sheetFilters.length]);
+
+    const handleDeleteExistingFilter = useCallback((index: number) => {
+        const currentFilters = filters.And?.Children ?? [];
+        const updatedFilters = currentFilters.filter((_, i) => i !== index);
+
+        const newWhereCondition = {
+            Type: WhereConditionType.And,
+            And: {
+                Children: updatedFilters
+            }
+        };
+
+        setFilters(newWhereCondition);
+        onChange?.(newWhereCondition);
+    }, [filters, onChange]);
+
+    const handleEditExistingFilter = useCallback((index: number) => {
+        const currentFilters = filters.And?.Children ?? [];
+        const filterToEdit = currentFilters[index];
+
+        if (filterToEdit?.Atomic) {
+            setEditingExistingIndex(index);
+            setEditingExistingFilter(filterToEdit.Atomic);
+        }
+    }, [filters]);
+
+    const handleSheetSave = useCallback(() => {
+        const validFilters = sheetFilters.filter(filter => filter.Key && filter.Operator && filter.Value);
+
+        if (validFilters.length > 0) {
+            const currentFilters = filters.And?.Children ?? [];
+            const updatedFilters = {
+                Type: WhereConditionType.And,
+                And: {
+                    Children: [
+                        ...currentFilters,
+                        ...validFilters.map(filter => ({
+                            Type: WhereConditionType.Atomic,
+                            Atomic: filter
+                        }))
+                    ]
+                }
+            };
+            setFilters(updatedFilters);
+            onChange?.(updatedFilters);
+        }
+
+        setSheetFilters([{ColumnType: "string", Key: "", Operator: "", Value: ""}]);
+        setEditingIndex(0);
+    }, [sheetFilters, onChange, filters]);
+
+    const handleEditExistingFilterChange = useCallback((field: keyof AtomicWhereCondition, value: string) => {
+        if (editingExistingFilter) {
+            const updatedFilter = { ...editingExistingFilter };
+            if (field === 'Key') {
+                updatedFilter.Key = value;
+                updatedFilter.ColumnType = columnTypes[columns.findIndex(col => col === value)];
+            } else {
+                updatedFilter[field] = value;
+            }
+            setEditingExistingFilter(updatedFilter);
+        }
+    }, [editingExistingFilter, columnTypes, columns]);
+
+    const handleCloseSheet = useCallback(() => {
+        setSheetOpen(false);
+        setEditingIndex(-1);
+        setEditingExistingIndex(-1);
+        setEditingExistingFilter(null);
+        setSheetFilters([{ColumnType: "string", Key: "", Operator: "", Value: ""}]);
+    }, []);
+
+    useEffect(() => {
+        setFilters(defaultWhere ?? { Type: WhereConditionType.And, And: { Children: [] } });
+    }, [defaultWhere]);
+
+    useEffect(() => {
+        if (pages.length === 0) {
+            dispatch(ScratchpadActions.ensurePagesHaveCells());
+        }
+    }, [dispatch, pages.length]);
+
+    const existingFilters = filters.And?.Children ?? [];
+
+    const totalConditions = filters.And?.Children?.length ?? 0;
+    const getConditionButtonText = () => {
+        if (totalConditions === 0) {
+            return t('addCondition');
+        } else if (totalConditions > 10) {
+            return t('tenPlusConditions');
+        } else {
+            return t('conditionCount', { count: totalConditions });
+        }
+    };
+
+    return (
+        <div className="flex flex-col" data-condition-count={totalConditions} data-condition-mode="and">
+            <Label className="mb-2">{t('whereCondition')}</Label>
+            <div className="flex flex-row gap-xs max-w-[min(500px,calc(100vw-20px))] flex-wrap">
+                <Button onClick={handleOpenSheet} data-testid="where-button" variant="secondary">
+                    <PlusCircleIcon className="w-4 h-4" /> {getConditionButtonText()}
+                </Button>
+            </div>
+            { }
+            <Sheet open={sheetOpen} onOpenChange={handleCloseSheet}>
+                <SheetContent side="right" className="w-[500px] max-w-full p-8 h-full">
+                    <SheetTitle className="flex items-center gap-2"><AdjustmentsHorizontalIcon className="w-5 h-5" /> {t('conditionsTitle')}</SheetTitle>
+                    {/* Display existing conditions as editable cards */}
+                    {existingFilters.length > 0 && (
+                        <div className="flex flex-col gap-sm mt-4">
+                            {existingFilters.map((filter, i) => {
+                                const isEditing = editingExistingIndex === i;
+                                return (
+                                    <div key={`existing-condition-card-${i}`} className="flex flex-col gap-2">
+                                        <div
+                                            className="flex gap-2 p-4 border rounded-lg"
+                                            data-testid={`existing-condition-card-${i}`}
+                                        >
+                                            <div className="flex items-center justify-between w-full">
+                                                <div className="text-sm">
+                                                    {filter.Atomic?.Key} {filter.Atomic?.Operator} {filter.Atomic?.Value}
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <Button
+                                                        className="size-6 h-full ml-1"
+                                                        onClick={(e: React.MouseEvent) => {
+                                                            e.stopPropagation();
+                                                            handleEditExistingFilter(i);
+                                                        }}
+                                                        data-testid={`edit-existing-filter-${i}`}
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        aria-label={t('editCondition')}
+                                                    >
+                                                        <PencilIcon className="w-3 h-3" aria-hidden="true" />
+                                                    </Button>
+                                                    <Button
+                                                        className="size-6 h-full"
+                                                        onClick={(e: React.MouseEvent) => {
+                                                            e.stopPropagation();
+                                                            handleDeleteExistingFilter(i);
+                                                        }}
+                                                        data-testid={`delete-existing-filter-${i}`}
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        aria-label={t('deleteCondition')}
+                                                    >
+                                                        <XCircleIcon className="w-3 h-3" aria-hidden="true" />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {isEditing && (
+                                            <div className="flex flex-col gap-2 p-4 border rounded-lg">
+                                                <Label className="text-sm font-medium">{t('editingCondition')}</Label>
+                                                <div className="flex flex-col gap-2">
+                                                    <Label className="text-xs">{t('field')}</Label>
+                                                    <SearchSelect
+                                                        value={editingExistingFilter?.Key || ""}
+                                                        options={fieldsDropdownItems}
+                                                        onChange={(value) => handleEditExistingFilterChange('Key', value)}
+                                                        buttonProps={{
+                                                            "data-testid": `edit-existing-field-key-${i}`,
+                                                        }}
+                                                        rightIcon={<ChevronDownIcon className="w-4 h-4"/>}
+                                                    />
+                                                </div>
+                                                <div className="flex flex-col gap-2">
+                                                    <Label className="text-xs">{t('operator')}</Label>
+                                                    <SearchSelect
+                                                        value={editingExistingFilter?.Operator || ""}
+                                                        options={validOperators}
+                                                        onChange={(value) => handleEditExistingFilterChange('Operator', value)}
+                                                        buttonProps={{
+                                                            "data-testid": `edit-existing-field-operator-${i}`,
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex flex-col gap-2">
+                                                    <Label className="text-xs">{t('value')}</Label>
+                                                    <Input
+                                                        value={editingExistingFilter?.Value || ""}
+                                                        onChange={(e) => handleEditExistingFilterChange('Value', e.target.value)}
+                                                        placeholder={t('enterFilterValue')}
+                                                        data-testid={`edit-existing-field-value-${i}`}
+                                                    />
+                                                </div>
+                                                <div className="flex gap-2 mt-2 w-full">
+                                                    <Button
+                                                        variant="secondary"
+                                                        onClick={() => {
+                                                            setEditingExistingIndex(-1);
+                                                            setEditingExistingFilter(null);
+                                                        }}
+                                                        data-testid={`edit-existing-filter-cancel-${i}`}
+                                                        size="sm"
+                                                        className="flex-1"
+                                                    >
+                                                        {t('cancel')}
+                                                    </Button>
+                                                    <Button
+                                                        className="flex-1"
+                                                        onClick={() => {
+                                                            if (editingExistingFilter && editingExistingIndex >= 0) {
+                                                                const currentFilters = filters.And?.Children ?? [];
+                                                                const updatedFilters = [...currentFilters];
+                                                                updatedFilters[editingExistingIndex] = {
+                                                                    Type: WhereConditionType.Atomic,
+                                                                    Atomic: editingExistingFilter
+                                                                };
+                                                                const newWhereCondition = {
+                                                                    Type: WhereConditionType.And,
+                                                                    And: { Children: updatedFilters }
+                                                                };
+                                                                setFilters(newWhereCondition);
+                                                                onChange?.(newWhereCondition);
+                                                                setEditingExistingIndex(-1);
+                                                                setEditingExistingFilter(null);
+                                                            }
+                                                        }}
+                                                        data-testid={`update-existing-filter-${i}`}
+                                                        size="sm"
+                                                    >
+                                                        {t('update')}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {/* Page Selection */}
+                    {/* <div className="flex flex-col gap-2 mt-6">
+                        <Label className="text-sm font-medium">Add condition to page</Label>
+                        <Select value={selectedPageId} onValueChange={setSelectedPageId}>
+                            <SelectTrigger className="w-full" data-testid="page-select">
+                                <SelectValue placeholder="Choose a page to add condition to..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {pageOptions.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                        {option.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        {selectedPageId === "new" && (
+                            <div className="flex flex-col gap-2">
+                                <Label className="text-xs">New page name</Label>
+                                <Input
+                                    value={newPageName}
+                                    onChange={(e) => setNewPageName(e.target.value)}
+                                    placeholder="Enter page name"
+                                    data-testid="new-page-name-input"
+                                />
+                            </div>
+                        )}
+                    </div> */}
+
+                    {/* Add new conditions section */}
+                    <div className="flex flex-col gap-lg mt-6 overflow-y-auto h-full">
+                        {sheetFilters.map((filter, index) => (
+                            <div
+                                key={index}
+                                className="flex flex-col gap-lg p-4 border rounded-lg"
+                            >
+                                <div className="flex items-center justify-between">
+                                    <Label className="text-sm font-medium">
+                                        {t('conditionNumber', { index: index + 1 })}
+                                    </Label>
+                                    {sheetFilters.length > 1 && (
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => {
+                                                setSheetFilters(prev => prev.filter((_, i) => i !== index));
+                                                if (editingIndex >= index) {
+                                                    setEditingIndex(Math.max(0, editingIndex - 1));
+                                                }
+                                            }}
+                                            data-testid={`remove-condition-${index}`}
+                                        >
+                                            <XCircleIcon className="w-4 h-4" />
+                                        </Button>
+                                    )}
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    <Label className="text-xs">{t('field')}</Label>
+                                    <SearchSelect
+                                        value={filter.Key}
+                                        options={fieldsDropdownItems}
+                                        onChange={(value) => handleSheetFieldChange(index, 'Key', value)}
+                                        buttonProps={{
+                                            "data-testid": `sheet-field-key-${index}`,
+                                        }}
+                                    />
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    <Label className="text-xs">{t('operator')}</Label>
+                                    <SearchSelect
+                                        value={filter.Operator}
+                                        options={validOperators}
+                                        onChange={(value) => handleSheetFieldChange(index, 'Operator', value)}
+                                        buttonProps={{
+                                            "data-testid": `sheet-field-operator-${index}`,
+                                        }}
+                                    />
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    <Label className="text-xs">{t('value')}</Label>
+                                    <Input
+                                        value={filter.Value}
+                                        onChange={(e) => handleSheetFieldChange(index, 'Value', e.target.value)}
+                                        placeholder={t('enterFilterValue')}
+                                        data-testid={`sheet-field-value-${index}`}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                        <div className="flex items-center justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleSheetAddFilter}
+                                data-testid="add-new-condition-button"
+                            >
+                                <PlusCircleIcon className="w-4 h-4" />
+                                {t('addCondition')}
+                            </Button>
+                        </div>
+                    </div>
+                    <SheetFooter className="flex flex-row w-full gap-sm px-0 mt-6">
+                        <Button
+                            className="flex-1"
+                            variant="secondary"
+                            onClick={handleCloseSheet}
+                            data-testid="cancel-add-conditions"
+                        >
+                            {t('cancel')}
+                        </Button>
+                        <Button
+                            className="flex-1"
+                            onClick={handleSheetSave}
+                            data-testid="add-conditions-button"
+                        >
+                            {t('addCondition')}
+                        </Button>
+                    </SheetFooter>
+                </SheetContent>
+            </Sheet>
+        </div>
+    );
+};
